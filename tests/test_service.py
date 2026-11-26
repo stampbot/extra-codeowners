@@ -2925,6 +2925,9 @@ async def test_worker_does_not_starve_evaluations_behind_authority_retries(
             ),
         )
     stop = asyncio.Event()
+    authority_started = asyncio.Event()
+    allow_authority_failure = asyncio.Event()
+    evaluated = asyncio.Event()
     calls: list[str] = []
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
@@ -2932,22 +2935,30 @@ async def test_worker_does_not_starve_evaluations_behind_authority_retries(
             self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             calls.append(f"authority:{repository}")
+            authority_started.set()
+            await allow_authority_failure.wait()
             raise RuntimeError("repository is temporarily unavailable")
 
     class Evaluator:
         github = AuthorityGitHub()
 
         async def evaluate_job(self, claimed: ClaimedJob) -> None:
+            await authority_started.wait()
             calls.append(f"evaluation:{claimed.pull_number}")
-            stop.set()
+            evaluated.set()
 
     worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
 
-    await worker.run(stop)
+    runner = asyncio.create_task(worker.run(stop))
+    try:
+        # The evaluation must finish while authority work is still blocked.
+        await asyncio.wait_for(evaluated.wait(), timeout=10)
+    finally:
+        stop.set()
+        authority_started.set()
+        allow_authority_failure.set()
+        await asyncio.wait_for(runner, timeout=10)
 
-    # Authority work for another repository may run in parallel now. The
-    # important contract is that its retry cannot occupy the only evaluation
-    # lane or starve the unrelated pull request.
     assert set(calls) == {"authority:example/authority-one", "evaluation:3"}
     assert store.claim("observer", 60) is None
     assert store.pending_count() == 2
