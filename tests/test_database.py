@@ -24,11 +24,11 @@ from extra_codeowners.database import (
     ServiceLease,
     SharedHeadEpoch,
     WebhookDelivery,
-    _normalize_schema_expression,
     isolated_postgresql_connect_args,
     utcnow,
     validate_database_schema,
 )
+from extra_codeowners.database_schema import _normalize_schema_expression
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.trace_context import TrustedTraceContext
 from extra_codeowners.webhooks import VerifiedWebhook, evaluation_job
