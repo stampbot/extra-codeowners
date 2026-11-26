@@ -15,6 +15,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import select
 
+import extra_codeowners.evaluator as evaluator_module
 import extra_codeowners.service as service_module
 from extra_codeowners.api_budget import (
     REQUEST_LANE,
@@ -606,14 +607,20 @@ def record_guard_releases(store: QueueStore, events: list[str]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_allowed_application_approval_satisfies_owned_lockfile(tmp_path: Path) -> None:
+async def test_allowed_application_approval_satisfies_owned_lockfile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     github = FakeGitHub(changed_path="uv.lock")
     store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    parser = MagicMock(wraps=parse_codeowners)
+    monkeypatch.setattr(service_module, "parse_codeowners", parser)
+    monkeypatch.setattr(evaluator_module, "parse_codeowners", parser)
 
     await service.evaluate_job(job(store))
 
     assert github.checks[-1]["conclusion"] == "success"
+    parser.assert_called_once()
 
 
 # Verifies XCO-014.

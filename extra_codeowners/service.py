@@ -26,7 +26,7 @@ from extra_codeowners.api_budget import (
     request_lane,
 )
 from extra_codeowners.base_evidence import base_evidence_fingerprint
-from extra_codeowners.codeowners import CodeownersDocument, parse_codeowners
+from extra_codeowners.codeowners import CodeownersDocument, CodeownersParseError, parse_codeowners
 from extra_codeowners.database import (
     PERIODIC_RECONCILIATION_REASON,
     AuthorityRequest,
@@ -40,7 +40,7 @@ from extra_codeowners.database import (
     normalize_repository_full_name,
     validate_head_sha,
 )
-from extra_codeowners.evaluator import evaluate
+from extra_codeowners.evaluator import evaluate, evaluate_parsed, invalid_codeowners_result
 from extra_codeowners.github import (
     MAX_CODEOWNERS_BYTES,
     MAX_PULL_FILES,
@@ -129,6 +129,14 @@ class BaseRecheckChangedError(RuntimeError):
 class _Assessment:
     result: EvaluationResult
     base_fingerprint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CheckPublication:
+    head_sha: str
+    base_ref: str
+    external_id: str
+    details_url: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1094,10 +1102,11 @@ class EvaluationService:
                 )
             )
         _, codeowners_text = codeowners
+        parse_failure = None
         try:
             document = parse_codeowners(codeowners_text)
-        except ValueError:
-            # The pure evaluator renders the parser's detailed line errors.
+        except CodeownersParseError as error:
+            parse_failure = invalid_codeowners_result(error)
             document = CodeownersDocument(())
 
         changed_path_upper_bound = expected_changed_files * 2
@@ -1194,7 +1203,9 @@ class EvaluationService:
         except (ValidationError, ValueError) as error:
             return _Assessment(_failure("malformed_github_evidence", str(error)))
         labels = _label_names(pull)
-        result = evaluate(
+        if parse_failure is not None:
+            return _Assessment(parse_failure)
+        result = evaluate_parsed(
             EvaluationInput(
                 head_sha=head_sha,
                 codeowners_text=codeowners_text,
@@ -1209,7 +1220,8 @@ class EvaluationService:
                     allow_insecure_changes=self.settings.allow_insecure_changes,
                     repository_policy_path=self.settings.policy_path,
                 ),
-            )
+            ),
+            document,
         )
         fingerprint = None
         if result.conclusion is EvaluationConclusion.SUCCESS:
@@ -1941,184 +1953,199 @@ class EvaluationService:
                 )
                 return
 
-            # A review, label, or policy trigger can arrive without changing
-            # either SHA. Never publish evidence collected before that trigger.
-            title = {
-                EvaluationConclusion.SUCCESS: "CODEOWNER approval requirement satisfied",
-                EvaluationConclusion.FAILURE: "CODEOWNER approval required",
-            }[result.conclusion]
-            warning = ""
-            if self.settings.allow_insecure_changes:
-                warning = (
-                    "\n\n> **Warning:** `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` "
-                    "disabled built-in non-delegable paths. Organization guardrails still apply."
-                )
-            # A shared installation authority guard lets normal evaluations
-            # publish concurrently while ordering every final result against
-            # the exclusive guard used by authority webhook acceptance.
-            async with self._authority_publish_guard(job.installation_id):
+            await self._publish_assessment(
+                job,
+                _CheckPublication(head_sha, base_ref, external_id, details_url),
+                _Assessment(result, base_fingerprint),
+            )
+
+    async def _publish_assessment(
+        self, job: ClaimedJob, publication: _CheckPublication, assessment: _Assessment
+    ) -> None:
+        """Publish stable evidence under the existing authority and check-write fences."""
+        head_sha = publication.head_sha
+        base_ref = publication.base_ref
+        details_url = publication.details_url
+        external_id = publication.external_id
+        result = assessment.result
+        # A review, label, or policy trigger can arrive without changing
+        # either SHA. Never publish evidence collected before that trigger.
+        title = {
+            EvaluationConclusion.SUCCESS: "CODEOWNER approval requirement satisfied",
+            EvaluationConclusion.FAILURE: "CODEOWNER approval required",
+        }[result.conclusion]
+        warning = ""
+        if self.settings.allow_insecure_changes:
+            warning = (
+                "\n\n> **Warning:** `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` "
+                "disabled built-in non-delegable paths. Organization guardrails still apply."
+            )
+        # A shared installation authority guard lets normal evaluations
+        # publish concurrently while ordering every final result against
+        # the exclusive guard used by authority webhook acceptance.
+        async with self._authority_publish_guard(job.installation_id):
+            async with self._check_write_guard(job.installation_id, head_sha):
+                # Check the generation while holding the same cross-process
+                # writer lock used by webhook revocation. If a trigger arrived
+                # before this lock, stale evidence is never published. If it
+                # arrives while this lock is held, its revocation PATCH is
+                # ordered after this completion, even if this process dies.
+                if not await asyncio.to_thread(self.store.is_current_claim, job):
+                    return
+                if not await asyncio.to_thread(
+                    self.store.shared_head_generation_is_publishable,
+                    job,
+                    head_sha,
+                ):
+                    return
+                if await asyncio.to_thread(self.store.has_blocking_authority, job, base_ref):
+                    raise AuthorityChangePendingError(
+                        "accepted authority change arrived during evaluation"
+                    )
+                if (
+                    result.conclusion is EvaluationConclusion.SUCCESS
+                    and not await self._head_is_unique_to_pull(job, head_sha)
+                ):
+                    result = _failure(
+                        "shared_head_commit",
+                        "the head commit is shared by multiple open pull requests; push a "
+                        "distinct commit before approval",
+                    )
+                    title = "CODEOWNER approval required"
+                if not await asyncio.to_thread(
+                    self.store.shared_head_generation_is_publishable,
+                    job,
+                    head_sha,
+                ):
+                    return
+                # Authoritative shared-head discovery may require many
+                # GitHub reads. Fence a lease owner that expired or was
+                # replaced while those reads were in flight.
+                if not await asyncio.to_thread(self.store.is_current_claim, job):
+                    return
+                try:
+                    await self.github.upsert_check_run(
+                        job.installation_id,
+                        job.repository_full_name,
+                        head_sha,
+                        self.settings.check_name,
+                        status="completed",
+                        conclusion=result.conclusion.value,
+                        title=title,
+                        summary=result.summary + warning,
+                        text=result.check_output(),
+                        details_url=details_url,
+                        external_id=external_id,
+                        include_re_evaluate_action=True,
+                        skip_if_unchanged=job.keeps_published_check,
+                    )
+                except asyncio.CancelledError:
+                    await self._restore_blocking_after_uncertain_completion(
+                        job,
+                        head_sha,
+                        details_url,
+                        external_id,
+                    )
+                    raise
+                except Exception:
+                    await self._restore_blocking_after_uncertain_completion(
+                        job,
+                        head_sha,
+                        details_url,
+                        external_id,
+                    )
+                    raise
+                try:
+                    claim_current = await asyncio.to_thread(
+                        self.store.is_current_claim,
+                        job,
+                    )
+                    shared_head_current = await asyncio.to_thread(
+                        self.store.shared_head_generation_is_publishable,
+                        job,
+                        head_sha,
+                    )
+                except asyncio.CancelledError:
+                    await self._restore_blocking_after_uncertain_completion(
+                        job,
+                        head_sha,
+                        details_url,
+                        external_id,
+                    )
+                    raise
+                except Exception:
+                    await self._restore_blocking_after_uncertain_completion(
+                        job,
+                        head_sha,
+                        details_url,
+                        external_id,
+                    )
+                    raise
+                if not claim_current or not shared_head_current:
+                    # A different pull request can accept a direct trigger
+                    # for this commit, or this evaluation's lease can be
+                    # replaced, while the GitHub request is in flight.
+                    # Restore a blocking result before releasing the shared
+                    # head writer.
+                    await self._restore_blocking_after_uncertain_completion(
+                        job,
+                        head_sha,
+                        details_url,
+                        external_id,
+                    )
+                    return
+
+            # If a trigger committed while the completion request was in
+            # flight, restore a blocking state ourselves. The shared writer
+            # guard prevents this reset from overwriting a newer generation
+            # that has already completed and removed its queue row.
+            superseded = await asyncio.to_thread(self.store.has_superseding_job, job)
+            authority_pending = await asyncio.to_thread(
+                self.store.has_blocking_authority, job, base_ref
+            )
+            if superseded or authority_pending:
                 async with self._check_write_guard(job.installation_id, head_sha):
-                    # Check the generation while holding the same cross-process
-                    # writer lock used by webhook revocation. If a trigger arrived
-                    # before this lock, stale evidence is never published. If it
-                    # arrives while this lock is held, its revocation PATCH is
-                    # ordered after this completion, even if this process dies.
-                    if not await asyncio.to_thread(self.store.is_current_claim, job):
-                        return
-                    if not await asyncio.to_thread(
-                        self.store.shared_head_generation_is_publishable,
-                        job,
-                        head_sha,
-                    ):
-                        return
-                    if await asyncio.to_thread(self.store.has_blocking_authority, job, base_ref):
-                        raise AuthorityChangePendingError(
-                            "accepted authority change arrived during evaluation"
-                        )
-                    if (
-                        result.conclusion is EvaluationConclusion.SUCCESS
-                        and not await self._head_is_unique_to_pull(job, head_sha)
-                    ):
-                        result = _failure(
-                            "shared_head_commit",
-                            "the head commit is shared by multiple open pull requests; push a "
-                            "distinct commit before approval",
-                        )
-                        title = "CODEOWNER approval required"
-                    if not await asyncio.to_thread(
-                        self.store.shared_head_generation_is_publishable,
-                        job,
-                        head_sha,
-                    ):
-                        return
-                    # Authoritative shared-head discovery may require many
-                    # GitHub reads. Fence a lease owner that expired or was
-                    # replaced while those reads were in flight.
-                    if not await asyncio.to_thread(self.store.is_current_claim, job):
-                        return
-                    try:
+                    superseded = await asyncio.to_thread(self.store.has_superseding_job, job)
+                    authority_pending = await asyncio.to_thread(
+                        self.store.has_blocking_authority, job, base_ref
+                    )
+                    if superseded or authority_pending:
                         await self.github.upsert_check_run(
                             job.installation_id,
                             job.repository_full_name,
                             head_sha,
                             self.settings.check_name,
-                            status="completed",
-                            conclusion=result.conclusion.value,
-                            title=title,
-                            summary=result.summary + warning,
-                            text=result.check_output(),
+                            status="in_progress",
+                            title="Re-evaluating CODEOWNER approvals",
+                            summary=(
+                                "New review, pull-request, or authority evidence arrived; "
+                                "approval is blocked pending re-evaluation."
+                            ),
                             details_url=details_url,
                             external_id=external_id,
-                            include_re_evaluate_action=True,
-                            skip_if_unchanged=scheduled_recheck,
                         )
-                    except asyncio.CancelledError:
-                        await self._restore_blocking_after_uncertain_completion(
-                            job,
-                            head_sha,
-                            details_url,
-                            external_id,
-                        )
-                        raise
-                    except Exception:
-                        await self._restore_blocking_after_uncertain_completion(
-                            job,
-                            head_sha,
-                            details_url,
-                            external_id,
-                        )
-                        raise
-                    try:
-                        claim_current = await asyncio.to_thread(
-                            self.store.is_current_claim,
-                            job,
-                        )
-                        shared_head_current = await asyncio.to_thread(
-                            self.store.shared_head_generation_is_publishable,
-                            job,
-                            head_sha,
-                        )
-                    except asyncio.CancelledError:
-                        await self._restore_blocking_after_uncertain_completion(
-                            job,
-                            head_sha,
-                            details_url,
-                            external_id,
-                        )
-                        raise
-                    except Exception:
-                        await self._restore_blocking_after_uncertain_completion(
-                            job,
-                            head_sha,
-                            details_url,
-                            external_id,
-                        )
-                        raise
-                    if not claim_current or not shared_head_current:
-                        # A different pull request can accept a direct trigger
-                        # for this commit, or this evaluation's lease can be
-                        # replaced, while the GitHub request is in flight.
-                        # Restore a blocking result before releasing the shared
-                        # head writer.
-                        await self._restore_blocking_after_uncertain_completion(
-                            job,
-                            head_sha,
-                            details_url,
-                            external_id,
-                        )
+                        if authority_pending:
+                            raise AuthorityChangePendingError(
+                                "accepted authority change arrived during check publication"
+                            )
                         return
 
-                # If a trigger committed while the completion request was in
-                # flight, restore a blocking state ourselves. The shared writer
-                # guard prevents this reset from overwriting a newer generation
-                # that has already completed and removed its queue row.
-                superseded = await asyncio.to_thread(self.store.has_superseding_job, job)
-                authority_pending = await asyncio.to_thread(
-                    self.store.has_blocking_authority, job, base_ref
-                )
-                if superseded or authority_pending:
-                    async with self._check_write_guard(job.installation_id, head_sha):
-                        superseded = await asyncio.to_thread(self.store.has_superseding_job, job)
-                        authority_pending = await asyncio.to_thread(
-                            self.store.has_blocking_authority, job, base_ref
-                        )
-                        if superseded or authority_pending:
-                            await self.github.upsert_check_run(
-                                job.installation_id,
-                                job.repository_full_name,
-                                head_sha,
-                                self.settings.check_name,
-                                status="in_progress",
-                                title="Re-evaluating CODEOWNER approvals",
-                                summary=(
-                                    "New review, pull-request, or authority evidence arrived; "
-                                    "approval is blocked pending re-evaluation."
-                                ),
-                                details_url=details_url,
-                                external_id=external_id,
-                            )
-                            if authority_pending:
-                                raise AuthorityChangePendingError(
-                                    "accepted authority change arrived during check publication"
-                                )
-                            return
-
-            await asyncio.to_thread(
-                self.store.record_audit,
-                job.repository_full_name,
-                job.pull_number,
-                head_sha,
-                result.conclusion.value,
-                {
-                    **result.model_dump(mode="json"),
-                    "base_evidence_fingerprint": base_fingerprint,
-                    "trigger": {
-                        "reason": job.reason,
-                        "delivery_id": job.last_delivery_id,
-                    },
+        await asyncio.to_thread(
+            self.store.record_audit,
+            job.repository_full_name,
+            job.pull_number,
+            head_sha,
+            result.conclusion.value,
+            {
+                **result.model_dump(mode="json"),
+                "base_evidence_fingerprint": assessment.base_fingerprint,
+                "trigger": {
+                    "reason": job.reason,
+                    "delivery_id": job.last_delivery_id,
                 },
-            )
-            EVALUATIONS.labels(result.conclusion.value).inc()
+            },
+        )
+        EVALUATIONS.labels(result.conclusion.value).inc()
 
 
 class Worker:
