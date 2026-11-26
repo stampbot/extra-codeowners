@@ -74,6 +74,8 @@ spec:
           env:
             - name: EXTRA_CODEOWNERS_ENVIRONMENT
               value: production
+            - name: EXTRA_CODEOWNERS_POSTGRES_TLS_MODE
+              value: {{ .Values.postgresql.tlsMode | quote }}
             - name: EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES
               value: {{ .Values.allowInsecureChanges | quote }}
             # The high-availability preset can run on multiple nodes. SQLite

@@ -20,6 +20,7 @@
     "securityContext",
     "existingSecret",
     "allowInsecureChanges",
+    "postgresql",
     "extraEnvFrom",
     "extraEnv",
     "extraVolumes",
@@ -43,6 +44,14 @@
     "topologySpreadConstraints"
   ],
   "properties": {
+    "postgresql": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tlsMode"],
+      "properties": {
+        "tlsMode": {"enum": ["verify-full", "require"]}
+      }
+    },
     "replicaCount": {
       "type": "integer",
       "minimum": 0

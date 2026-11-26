@@ -11,6 +11,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from ssl import get_default_verify_paths
 from typing import Any, Final, Literal
 
 from sqlalchemy import (
@@ -70,16 +71,30 @@ PRESERVING_RECHECK_REASONS: Final = frozenset({SCHEDULED_RECHECK_REASON, BASE_RE
 # unconfirmed completion, or a pull request with no completion record.
 PERIODIC_RECONCILIATION_REASON: Final = "periodic_reconciliation"
 WorkClass = Literal["interactive", "recovery"]
+PostgresTlsMode = Literal["verify-full", "require"]
 # ``sslmode=require`` normally skips server-certificate verification, but libpq
 # upgrades it to ``verify-ca`` when its default root certificate exists. Point
 # it at a child of the platform null device instead: the device cannot contain
 # children, so the path cannot exist or be created. This preserves the
-# deliberate encryption-only production contract without trusting a CA file
+# deliberate encryption-only policy without trusting a CA file
 # that happened to be present in the process account's home directory.
 LIBPQ_DISABLED_ROOT_CERT = os.path.join(os.devnull, "extra-codeowners-root.crt")
 
 
-def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
+def _postgres_root_certificate(value: str | None) -> str:
+    if value is None:
+        # The Python distribution and the wheel's libpq may have been built on
+        # different operating systems. Prefer the host bundle, not an ambient path.
+        bundle = get_default_verify_paths().openssl_cafile
+        value = bundle if bundle is not None and os.path.isfile(bundle) else "system"
+    if value == "system" and any(name in os.environ for name in ("SSL_CERT_FILE", "SSL_CERT_DIR")):
+        raise ValueError("PostgreSQL system roots cannot use ambient OpenSSL trust paths")
+    return value
+
+
+def isolated_postgresql_connect_args(
+    database_url: str, *, tls_mode: PostgresTlsMode = "verify-full"
+) -> dict[str, object]:
     """Pin every libpq route selector that could otherwise fall back to the environment."""
 
     if "PGSERVICE" in os.environ:
@@ -88,18 +103,21 @@ def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
     port = parsed.port
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("PostgreSQL URL port must be between 1 and 65535")
-    allowed_query_parameters = {"host", "hostaddr", "sslmode"}
+    if tls_mode not in {"verify-full", "require"}:
+        raise ValueError("unsupported PostgreSQL TLS policy")
+    allowed_query_parameters = {"host", "hostaddr", "sslmode", "sslrootcert"}
     if set(parsed.query) - allowed_query_parameters:
         raise ValueError("PostgreSQL URL contains unsupported connection parameters")
     query_host = parsed.query.get("host")
     hostaddr = parsed.query.get("hostaddr")
     sslmode = parsed.query.get("sslmode")
+    root_cert = parsed.query.get("sslrootcert")
     if (
         parsed.drivername != "postgresql+psycopg"
         or (query_host is not None and not isinstance(query_host, str))
         or (hostaddr is not None and not isinstance(hostaddr, str))
         or (sslmode is not None and not isinstance(sslmode, str))
-        or sslmode not in {None, "disable", "require"}
+        or sslmode not in {None, "disable", "require", "verify-full"}
         or (query_host is not None and parsed.host is not None)
     ):
         raise ValueError(
@@ -116,7 +134,19 @@ def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
         or not parsed.password
     ):
         raise ValueError("PostgreSQL URL must pin one route, database, username, and password")
-    local = host in {"localhost", "127.0.0.1", "::1"} or host.startswith("/")
+    local = hostaddr is None and (host in {"localhost", "127.0.0.1", "::1"} or host.startswith("/"))
+    mode = sslmode or ("disable" if local else tls_mode)
+    if mode != tls_mode and not (local and mode == "disable"):
+        raise ValueError("PostgreSQL URL sslmode must match the configured TLS policy")
+    if root_cert is not None and (
+        mode != "verify-full"
+        or not isinstance(root_cert, str)
+        or (
+            root_cert != "system"
+            and (not root_cert.startswith("/") or ".." in root_cert.split("/"))
+        )
+    ):
+        raise ValueError("PostgreSQL sslrootcert requires verified TLS and an absolute path")
     arguments: dict[str, object] = {
         "dbname": parsed.database,
         "host": host,
@@ -128,8 +158,12 @@ def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
         # libpq otherwise prefers GSSAPI encryption to SSL when credentials
         # are available, bypassing the configured SSL transport.
         "gssencmode": "disable",
-        "sslmode": sslmode or ("disable" if local and not hostaddr else "require"),
-        "sslrootcert": LIBPQ_DISABLED_ROOT_CERT,
+        "sslmode": mode,
+        "sslrootcert": (
+            _postgres_root_certificate(root_cert)
+            if mode == "verify-full"
+            else LIBPQ_DISABLED_ROOT_CERT
+        ),
         "user": parsed.username,
     }
     return arguments
@@ -749,7 +783,9 @@ class QueueStore:
     earlier evaluation.
     """
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self, database_url: str, *, postgres_tls_mode: PostgresTlsMode = "verify-full"
+    ) -> None:
         is_postgresql = database_url.startswith("postgresql")
         connect_args: dict[str, Any]
         engine_options: dict[str, Any] = {"pool_pre_ping": True}
@@ -760,7 +796,7 @@ class QueueStore:
             # exhausted application pool must fail within that budget so GitHub
             # can redeliver instead of holding a request indefinitely.
             connect_args = {
-                **isolated_postgresql_connect_args(database_url),
+                **isolated_postgresql_connect_args(database_url, tls_mode=postgres_tls_mode),
                 "connect_timeout": DATABASE_CONNECT_TIMEOUT_SECONDS,
                 "options": (
                     f"-c statement_timeout={DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
@@ -782,14 +818,7 @@ class QueueStore:
             # an uncertain unlock would otherwise poison that pooled session.
             self._lock_engine = create_engine(
                 database_url,
-                connect_args={
-                    **isolated_postgresql_connect_args(database_url),
-                    "connect_timeout": DATABASE_CONNECT_TIMEOUT_SECONDS,
-                    "options": (
-                        f"-c statement_timeout={DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
-                        "-c search_path=public"
-                    ),
-                },
+                connect_args=connect_args,
                 poolclass=NullPool,
                 pool_pre_ping=True,
             )

@@ -46,24 +46,17 @@ In production mode, startup rejects:
 - a database URL that does not use the exact `postgresql+psycopg` driver
 - a PostgreSQL URL without one explicit host, database, username, and nonempty
   password
-- a remote PostgreSQL URL that does not use `sslmode=require`
+- a remote PostgreSQL URL whose explicit TLS mode disagrees with deployment settings
 - any ambient libpq connection variable.
 
-Every remote production URL must use `sslmode=require`. This encrypts the
-connection without verifying the database certificate or hostname. The process
-prevents libpq from loading its default root certificate, so that behavior does
-not depend on a file in the process account. Every production URL must name
-exactly one nonempty host or Unix-socket path;
-hostless and comma-separated multi-host URLs are rejected. TLS may be omitted
-only for `localhost`, `127.0.0.1`, `::1`, a Unix-socket path, or a local-proxy
-path. A query-string `host` overrides the URL authority only when the authority
-omits its host. A `hostaddr` is allowed only with that explicit host and
-`sslmode=require`.
+Remote PostgreSQL uses `verify-full` unless the operator explicitly sets
+`EXTRA_CODEOWNERS_POSTGRES_TLS_MODE=require`. TLS may be omitted only for
+operator-controlled loopback and Unix-socket connections without `hostaddr`.
+See the [PostgreSQL settings](configuration.md#postgresql-connection-contract)
+for accepted routes and CA sources.
 
 Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`, and
-`PGPASSFILE` are unsupported. The URL accepts only `host`, `hostaddr`,
-`sslmode` query parameters. Its TLS mode must be `require` or `disable`;
-certificate-verification modes are unsupported. Percent-encode reserved
+`PGPASSFILE` are unsupported. Percent-encode reserved
 characters in the required username and password. The process pins
 `search_path=public`; caller-supplied `options` are rejected.
 

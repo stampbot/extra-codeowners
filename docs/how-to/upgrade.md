@@ -44,6 +44,14 @@ database, username, and nonempty password. Percent-encode reserved characters
 in the username and password. It must use the exact `postgresql+psycopg`
 driver.
 
+If the target version introduces `EXTRA_CODEOWNERS_POSTGRES_TLS_MODE`, check
+the connection before the maintenance window. The default is `verify-full`.
+Remove an old `sslmode=require` from the URL and make sure the database
+hostname matches its certificate and the client trusts its CA. If you intend
+to keep encryption without server verification, explicitly select `require`
+for both the target runtime and the migrator. The Helm value
+`postgresql.tlsMode` sets both.
+
 Extra CODEOWNERS does not use connection services, `.pgpass`, or ambient libpq
 connection variables. Never paste the database URL into shell history or a
 change record.
@@ -254,16 +262,17 @@ export PGPORT="5432"
 export PGUSER="extra_codeowners_backup"
 export PGPASSWORD
 export PGDATABASE="extra_codeowners"
-export PGSSLMODE="require"
+export PGSSLMODE="verify-full"
+export PGSSLROOTCERT="/path/to/trusted-ca-bundle.pem"
 export PGGSSENCMODE="disable"
 ```
 
 `PGPASSWORD` must already contain the backup role's password without printing
 it. The other values must explicitly identify the production Extra CODEOWNERS
-database. `PGSSLMODE=require` encrypts the connection but does not verify the
-database certificate or hostname unless libpq finds a root certificate on the
-operator host. Run backups from an operator-controlled network and keep the
-backup role limited to the application database.
+database. Set `PGSSLROOTCERT` to a readable CA bundle that trusts the database
+server, and use a hostname listed on its certificate. Run backups from an
+operator-controlled network and limit the backup role to the application
+database.
 `PGGSSENCMODE=disable` prevents libpq from preferring GSSAPI encryption over
 the configured SSL transport when the operator host has Kerberos credentials.
 

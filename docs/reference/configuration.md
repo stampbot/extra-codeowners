@@ -188,13 +188,20 @@ comma-separated multi-host URLs are rejected, as is an authority host combined
 with a query-string `host`. An explicit authority port must be between 1 and
 65535; omission uses PostgreSQL's default port 5432.
 
-Only three query parameters are supported:
+Set `EXTRA_CODEOWNERS_POSTGRES_TLS_MODE` to `verify-full` (default) or
+`require`. The application and migrator use the same policy. Verified TLS
+uses the Python distribution's default CA bundle if present, otherwise
+libpq's system trust store. For the system store, unset `SSL_CERT_FILE` and
+`SSL_CERT_DIR`; use an explicit `sslrootcert` path to select a different bundle.
+
+These query parameters are supported:
 
 | Parameter | Constraint |
 | --- | --- |
 | `host` | Supplies the one host or Unix-socket path only when the URL authority omits its host. |
-| `hostaddr` | Supplies one nonempty address. It requires an explicit `host` and `sslmode=require`. |
-| `sslmode` | `require` or `disable`. A remote route requires `require`. It encrypts the connection but does not verify the database certificate or hostname. The application prevents libpq from loading its default root certificate, so that behavior does not vary with the process account. Certificate-verification modes are unsupported. An operator-controlled `localhost`, `127.0.0.1`, `::1`, or Unix-socket route may omit TLS or use `disable` when `hostaddr` is absent. |
+| `hostaddr` | Supplies one nonempty address. Requires an explicit host and makes the route remote. |
+| `sslmode` | Optional. A remote URL inherits the configured mode when omitted and must match it when set. An operator-controlled loopback or Unix-socket route may use `disable` when `hostaddr` is absent. |
+| `sslrootcert` | Optional. In `verify-full` mode only, selects `system` or an absolute CA bundle path. It is rejected for encryption-only and local plaintext connections. |
 
 Unknown query parameters are rejected. In particular, `service` URLs,
 `PGSERVICE`, and `PGSERVICEFILE` are unsupported. The application also supplies
@@ -355,7 +362,7 @@ credential set, and restart the workload.
 - Invalid TOML, an unsupported schema version, or ambiguous policy fails evaluation and produces a diagnostic check result. An enrolled App identity mismatch makes that App's review ineligible and emits a sanitized warning; independent appropriate human or application evidence can still satisfy the owner set.
 - A repository with no policy and no managed Extra CODEOWNERS check is not enrolled: the service publishes no check and does not load organization policy for it. Organization configuration alone never opts repositories in.
 - An explicitly disabled repository policy produces a failing check and never causes an application approval to count. If policy disappears after the App has already created its named check on the current head, a later evaluation updates that managed check to failure instead of leaving a stale success.
-- Production service startup requires an HTTPS GitHub API URL, including during the credential-free setup flow. Outside that flow it also requires complete GitHub credentials and a webhook secret of at least 32 bytes. Every non-local PostgreSQL connection must use `sslmode=require`; an operator-controlled loopback or Unix-socket transport is also allowed.
+- Production service startup requires an HTTPS GitHub API URL, including during the credential-free setup flow. Outside that flow it also requires complete GitHub credentials and a webhook secret of at least 32 bytes. Remote PostgreSQL uses verified TLS unless the deployment explicitly selects encryption only.
 - Setup-mode startup requires an HTTPS public URL and a setup-state secret of at least 32 bytes.
 
 Safe disablement has this order:

@@ -138,7 +138,8 @@ def test_upgrade_backup_example_preserves_transport_and_file_security() -> None:
     runbook = UPGRADE_RUNBOOK.read_text(encoding="utf-8")
 
     for required in (
-        'export PGSSLMODE="require"',
+        'export PGSSLMODE="verify-full"',
+        'export PGSSLROOTCERT="/path/to/trusted-ca-bundle.pem"',
         'export PGGSSENCMODE="disable"',
         '[[ "$variable" == PG* && "$variable" != "PGPASSWORD" ]]',
         "mktemp --directory",

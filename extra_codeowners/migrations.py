@@ -31,6 +31,7 @@ from extra_codeowners import __version__
 from extra_codeowners.database import (
     DATABASE_CONNECT_TIMEOUT_SECONDS,
     DATABASE_MIGRATION_HEAD,
+    PostgresTlsMode,
     isolated_postgresql_connect_args,
     validate_database_schema,
 )
@@ -218,11 +219,11 @@ _PRE_ALEMBIC_0_1_BASELINE = (
 )
 
 
-def _engine(database_url: str) -> Engine:
+def _engine(database_url: str, *, postgres_tls_mode: PostgresTlsMode = "verify-full") -> Engine:
     connect_args: dict[str, object]
     if database_url.startswith("postgresql"):
         connect_args = {
-            **isolated_postgresql_connect_args(database_url),
+            **isolated_postgresql_connect_args(database_url, tls_mode=postgres_tls_mode),
             "connect_timeout": DATABASE_CONNECT_TIMEOUT_SECONDS,
             "options": (
                 f"-c statement_timeout={MIGRATION_STATEMENT_TIMEOUT_MILLISECONDS} "
@@ -264,9 +265,11 @@ def expected_revision() -> str:
     return head
 
 
-def current_revision(database_url: str) -> str | None:
+def current_revision(
+    database_url: str, *, postgres_tls_mode: PostgresTlsMode = "verify-full"
+) -> str | None:
     """Return the database's current Alembic revision without changing it."""
-    engine = _engine(database_url)
+    engine = _engine(database_url, postgres_tls_mode=postgres_tls_mode)
     try:
         with engine.connect() as connection:
             return MigrationContext.configure(connection).get_current_revision()
@@ -508,6 +511,7 @@ def _apply_upgrade(config: Config, revision: str) -> None:
 def upgrade_database(
     database_url: str,
     *,
+    postgres_tls_mode: PostgresTlsMode = "verify-full",
     lock_timeout_seconds: float = 60.0,
     adopt_pre_alembic_schema: bool = False,
     revision: str = "head",
@@ -518,7 +522,7 @@ def upgrade_database(
     commands always target ``head``.
     """
     expected_revision()
-    engine = _engine(database_url)
+    engine = _engine(database_url, postgres_tls_mode=postgres_tls_mode)
     try:
         with engine.connect() as connection, _migration_guard(connection, lock_timeout_seconds):
             config = _config(connection)

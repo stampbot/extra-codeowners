@@ -119,7 +119,7 @@ app.kubernetes.io/component: application
 {{- fail "autoscaling.maxReplicas greater than 1 requires highAvailability.enabled so PostgreSQL coordination and scheduling safeguards are enabled" -}}
 {{- end -}}
 {{- range .Values.extraEnv -}}
-{{- if or (eq .name "EXTRA_CODEOWNERS_ENVIRONMENT") (eq .name "EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES") (eq .name "EXTRA_CODEOWNERS_REQUIRE_POSTGRESQL") -}}
+{{- if or (eq .name "EXTRA_CODEOWNERS_ENVIRONMENT") (eq .name "EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES") (eq .name "EXTRA_CODEOWNERS_REQUIRE_POSTGRESQL") (eq .name "EXTRA_CODEOWNERS_POSTGRES_TLS_MODE") -}}
 {{- fail (printf "extraEnv must not override chart-managed variable %s" .name) -}}
 {{- end -}}
 {{- if hasPrefix "PG" .name -}}
@@ -150,8 +150,8 @@ app.kubernetes.io/component: application
 {{- fail "migrations.extraEnvFrom is unsupported because EnvFromSource keys cannot be validated; use migrations.extraEnv with explicit names and valueFrom references" -}}
 {{- end -}}
 {{- range .Values.migrations.extraEnv -}}
-{{- if eq .name "EXTRA_CODEOWNERS_ENVIRONMENT" -}}
-{{- fail "migrations.extraEnv must not override chart-managed variable EXTRA_CODEOWNERS_ENVIRONMENT" -}}
+{{- if or (eq .name "EXTRA_CODEOWNERS_ENVIRONMENT") (eq .name "EXTRA_CODEOWNERS_POSTGRES_TLS_MODE") -}}
+{{- fail (printf "migrations.extraEnv must not override chart-managed variable %s" .name) -}}
 {{- end -}}
 {{- if hasPrefix "PG" .name -}}
 {{- fail (printf "migrations.extraEnv must not set ambient libpq variable %s; use EXTRA_CODEOWNERS_DATABASE_URL" .name) -}}

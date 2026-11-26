@@ -22,7 +22,7 @@ import extra_codeowners.app as app_module
 import extra_codeowners.webhook_ingress as webhook_ingress
 from extra_codeowners import __version__
 from extra_codeowners.build_identity import BuildIdentity
-from extra_codeowners.database import QueueStore
+from extra_codeowners.database import PostgresTlsMode, QueueStore
 from extra_codeowners.github import GitHubRateLimitError
 from extra_codeowners.manifest import ManifestService
 from extra_codeowners.merge_group_work import MergeGroupQueue
@@ -176,8 +176,9 @@ async def test_lifespan_closes_an_owned_store_when_initialization_fails(
     instances: list[Any] = []
 
     class FailingStore:
-        def __init__(self, database_url: str) -> None:
+        def __init__(self, database_url: str, *, postgres_tls_mode: PostgresTlsMode) -> None:
             del database_url
+            assert postgres_tls_mode == "verify-full"
             self.closed = False
             self.engine = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
             instances.append(self)
@@ -222,8 +223,9 @@ async def test_lifespan_startup_failure_stops_tasks_and_closes_owned_resources(
     manifests: list[Any] = []
 
     class OwnedStore:
-        def __init__(self, database_url: str) -> None:
+        def __init__(self, database_url: str, *, postgres_tls_mode: PostgresTlsMode) -> None:
             del database_url
+            assert postgres_tls_mode == "verify-full"
             self.engine = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
             stores.append(self)
 
