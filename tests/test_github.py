@@ -657,7 +657,10 @@ async def test_raw_content_accepts_malformed_length_with_bounded_body(
 
 
 @pytest.mark.asyncio
-async def test_raw_content_refreshes_rejected_installation_token(private_key: str) -> None:
+@pytest.mark.parametrize("streaming", (False, True))
+async def test_response_readers_refresh_rejected_installation_token(
+    private_key: str, streaming: bool
+) -> None:
     token_calls = 0
     content_calls = 0
     rejected = TrackingStream(b'{"message":"Bad credentials"}')
@@ -676,11 +679,14 @@ async def test_raw_content_refreshes_rejected_installation_token(private_key: st
         content_calls += 1
         if request.headers["authorization"] == "Bearer installation-token-1":
             return httpx.Response(401, stream=rejected)
-        return httpx.Response(200, stream=TrackingStream(b"enabled = true\n"))
+        return httpx.Response(200, stream=TrackingStream(b'{"state":"open"}'))
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
 
-    assert await client.get_file_text(2, "example/project", "policy") == "enabled = true\n"
+    if streaming:
+        assert await client.get_file_text(2, "example/project", "policy") == '{"state":"open"}'
+    else:
+        assert await client.get_pull(2, "example/project", 3) == {"state": "open"}
     await client.close()
 
     assert token_calls == 2

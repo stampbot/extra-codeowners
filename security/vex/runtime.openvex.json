@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:36ed2b68-34e7-5587-b94e-16009f9c85f6",
+  "@id": "urn:uuid:4f553300-d038-55cc-b604-4bd718dd7e34",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-26T13:23:11Z",
+  "last_updated": "2026-11-26T13:35:10Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1343,9 +1343,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-26T13:23:11Z",
+  "timestamp": "2026-11-26T13:35:10Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 56,
+  "version": 57,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1381,7 +1381,7 @@
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "6ab8504381c2f8b627b97d40cd8a709168c11c5f1f32fde7fca8c0be18b04d8c",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "8751a0a9725c73e5f69a69d1300fa50945b77fb2be50c753a6e472dd9e16bf26",
+      "extra_codeowners/github.py": "e7093d1aa1649b2406cf77238c48c9683b76f47b7a7f5c6127e3bdf4e1b02bcd",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/merge_group_work.py": "7dbf80fadf5a4aafe7e4f32078fe432511a2582321e5b960da9641c6103a349d",
@@ -1421,7 +1421,7 @@
       "tools/source_recipes/wheel-supplement-protobuf-7.35.1.json": "5b407c288cf74e090f4934113f9bb6f7907a37d6ccbb228321bedb0612b03c8f",
       "uv.lock": "f8a9a125ba46d5275da8300e3f640e5767df2f451f7601a26e4be17c81e3f70e"
     },
-    "review": "Retain existing vulnerability assessments after separating schema persistence and enabling hostname and CA verification on the existing libpq stream-TLS route. Python only resolves the CA path and does not create a new SSL connection.",
+    "review": "The GitHub readers share telemetry, deadline, quota and token-cache handling on the existing HTTPX transport. Verified PostgreSQL and schema persistence remain as reviewed. No dependencies or native entrypoints changed; existing vulnerability assessments are unchanged.",
     "schema_version": 1
   }
 }
