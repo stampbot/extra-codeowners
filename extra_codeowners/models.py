@@ -88,6 +88,8 @@ def normalize_repository_path(value: str) -> str:
     path = value
     if not path:
         raise ValueError("repository path must not be empty")
+    if any(unicodedata.category(character) == "Cc" for character in path):
+        raise ValueError("repository paths containing control characters are unsupported")
     if path != path.strip():
         raise ValueError("repository paths with leading or trailing whitespace are unsupported")
     if path.startswith("/") or "\\" in path:

@@ -81,6 +81,10 @@ consistency.
 before parsing any field that can affect authorization. For mapped events,
 `X-GitHub-Delivery` is the deduplication key.
 
+The receiver rejects malformed signature, delivery, and event headers before
+reading the body. Each process admits up to eight concurrent body reads and
+gives each read four seconds. These limits apply before signature verification.
+
 Ingress records a direct delivery, its pull-request work, and a pending
 revocation for the payload's exact head in one database transaction. The
 delivery also remembers the exact shared-head generation it created. A

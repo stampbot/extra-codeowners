@@ -69,6 +69,26 @@ def merge_group_trigger(webhook: VerifiedWebhook) -> MergeGroupTrigger | None:
         raise WebhookError(str(error)) from error
 
 
+def validate_webhook_headers(
+    signature: str | None,
+    delivery_id: str | None,
+    event: str | None,
+) -> tuple[str, str, str]:
+    """Reject malformed envelopes before allocating a request body."""
+    if not signature or not signature.startswith("sha256="):
+        msg = "missing or malformed X-Hub-Signature-256"
+        raise WebhookError(msg)
+    if not delivery_id or len(delivery_id) > 128:
+        msg = "missing or malformed X-GitHub-Delivery"
+        raise WebhookError(msg)
+    if not event or len(event) > 128:
+        msg = "missing or malformed X-GitHub-Event"
+        raise WebhookError(msg)
+    if re.fullmatch(r"sha256=[0-9a-f]{64}", signature) is None:
+        raise WebhookError("missing or malformed X-Hub-Signature-256")
+    return signature, delivery_id, event
+
+
 def verify_webhook(
     body: bytes,
     *,
@@ -81,15 +101,7 @@ def verify_webhook(
     if len(body) > MAX_WEBHOOK_BYTES:
         msg = "webhook payload exceeds the 10 MiB limit"
         raise WebhookError(msg)
-    if not signature or not signature.startswith("sha256="):
-        msg = "missing or malformed X-Hub-Signature-256"
-        raise WebhookError(msg)
-    if not delivery_id or len(delivery_id) > 128:
-        msg = "missing or malformed X-GitHub-Delivery"
-        raise WebhookError(msg)
-    if not event or len(event) > 128:
-        msg = "missing or malformed X-GitHub-Event"
-        raise WebhookError(msg)
+    signature, delivery_id, event = validate_webhook_headers(signature, delivery_id, event)
     expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature):
         msg = "webhook signature mismatch"
