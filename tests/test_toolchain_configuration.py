@@ -1742,8 +1742,10 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     source_verification = publish.index("python -I -S -B tools/release_sources.py verify")
     assert source_verification < publish.index("id: tag")
     recovery = _workflow_job(release, "verify-existing")
+    assert "run: .github/scripts/verify-published-release.sh" in recovery
+    verifier = (ROOT / ".github" / "scripts" / "verify-published-release.sh").read_text()
     for architecture in ("amd64", "arm64"):
-        assert f"cpython-source-{architecture}.tar.gz.sigstore.json" in recovery
+        assert f"cpython-source-{architecture}.tar.gz.sigstore.json" in verifier
 
 
 def test_release_retains_one_cached_debian_source_bundle_before_publication() -> None:
@@ -1768,7 +1770,11 @@ def test_release_retains_one_cached_debian_source_bundle_before_publication() ->
     assert publish.index("tools/release_debian_sources.py verify") < publish.index("id: tag")
     assert "subject-path: release/image/debian-source.tar" in publish
     assert "-name 'debian-source.tar'" in publish
-    assert "debian-source.tar.sigstore.json" in _workflow_job(workflow, "verify-existing")
+    assert "run: .github/scripts/verify-published-release.sh" in _workflow_job(
+        workflow, "verify-existing"
+    )
+    verifier = (ROOT / ".github" / "scripts" / "verify-published-release.sh").read_text()
+    assert "debian-source.tar.sigstore.json" in verifier
 
 
 def test_release_retries_are_idempotent_and_keep_versions_in_one_place() -> None:
