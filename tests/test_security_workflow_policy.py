@@ -14,6 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
+PUBLISHED_VERIFIER = ROOT / ".github" / "scripts" / "verify-published-release.sh"
 SECURITY_WORKFLOWS = (
     "dco.yml",
     "codeql.yml",
@@ -440,14 +441,12 @@ def test_release_state_lookups_retry_unavailable_apis_and_treat_only_404_as_miss
     assert create.index("gh release upload") < create.index("gh release edit")
     assert "verify_published_release" in create
     assert "for attempt in 1 2 3" in create
-    assert ".draft == false and" in create
-    assert ".immutable == true and" in create
-    assert ".prerelease == $prerelease" in create
+    assert ".github/scripts/verify-published-release.sh release" in create
     assert "published)" in create
     published_retry = "verify_published_release\n              exit 0"
     assert create.index("published)") < create.index(published_retry)
     assert create.rindex("gh release edit") < create.rindex("verify_published_release")
-    assert ".draft == false and .immutable == true" in verify
+    assert "run: .github/scripts/verify-published-release.sh\n" in verify + "\n"
     assert "repos/${GITHUB_REPOSITORY}/immutable-releases" not in jobs["plan"]
 
 
@@ -455,25 +454,18 @@ def test_release_publication_retry_verifies_the_completed_release_from_this_run(
     jobs = _workflow_jobs((WORKFLOWS / "release.yml").read_text(encoding="utf-8"))
     create = _named_step(jobs["publish"], "Create GitHub release")
 
-    assert 'gh release download "${TAG}"' in create
-    assert '--repo "${GITHUB_REPOSITORY}"' in create
+    verifier = PUBLISHED_VERIFIER.read_text(encoding="utf-8")
+    assert 'gh release download "${TAG}"' in verifier
+    assert '--repo "${GITHUB_REPOSITORY}"' in verifier
     assert "release artifacts have duplicate names" in create
     assert "release artifact is missing or empty" in create
     assert "Sigstore bundle is not a JSON object" in create
     assert create.index("release artifacts have duplicate names") < create.index(
         'gh release create "${TAG}" --draft'
     )
-    assert "([.assets[].name] | length == (unique | length))" in create
-    assert '(.digest | test("^sha256:[0-9a-f]{64}$"))' in create
-    assert 'release["assets"]' in create
-    assert "collections.Counter(api_names) != expected_names" in create
-    assert "expected_names = collections.Counter(local.keys())" in create
-    assert "collections.Counter(remote.keys()) != expected_names" in create
-    assert 'published.stat().st_size != asset["size"]' in create
-    assert 'digest != asset["digest"]' in create
-    assert 'name.endswith(".sigstore.json")' in create
-    assert 'json.loads(published.read_text(encoding="utf-8"))' in create
-    assert "published.read_bytes() != local[name].read_bytes()" in create
+    assert "([.assets[].name] | length == (unique | length))" in verifier
+    assert '(.digest | test("^sha256:[0-9a-f]{64}$"))' in verifier
+    assert 'tools/published_release_assets.py "${metadata}" "${assets}" "${staged}"' in verifier
     assert "Release %s was published while this run was active" not in create
 
     published_case = create.split("published)", 1)[1].split(";;", 1)[0]
@@ -483,7 +475,7 @@ def test_release_publication_retry_verifies_the_completed_release_from_this_run(
 
     first_publish = create.rsplit('gh release edit "${TAG}" --draft=false', 1)[1]
     assert "verify_published_release" in first_publish
-    assert ".github/scripts/verify-release-provenance.sh" in create
+    assert ".github/scripts/verify-release-provenance.sh" in verifier
 
 
 def _release_asset_metadata(name: str, contents: bytes) -> dict[str, object]:
@@ -503,17 +495,6 @@ def _run_published_release_recovery(
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
     script = _run_script(source, "Create GitHub release")
-    published_json = tmp_path / "published-release.json"
-    published_assets = tmp_path / "published-release-assets"
-    script = script.replace(
-        "/tmp/published-release.json",  # noqa: S108 - replaces workflow-owned path
-        str(published_json),
-    )
-    script = script.replace(
-        "/tmp/published-release-assets",  # noqa: S108 - replaces workflow-owned path
-        str(published_assets),
-    )
-
     repository = tmp_path / "repository"
     release = repository / "release"
     release.mkdir(parents=True)
@@ -583,6 +564,9 @@ else:
     fake_sleep.chmod(0o755)
     provenance_script = repository / ".github" / "scripts" / "verify-release-provenance.sh"
     provenance_script.parent.mkdir(parents=True)
+    shutil.copy2(PUBLISHED_VERIFIER, provenance_script.with_name(PUBLISHED_VERIFIER.name))
+    (repository / "tools").mkdir()
+    shutil.copy2(ROOT / "tools" / "published_release_assets.py", repository / "tools")
     provenance_script.write_text(
         '#!/usr/bin/env bash\nprintf \'provenance %s\\n\' "$*" >>"${FAKE_GH_LOG}"\n',
         encoding="utf-8",
@@ -743,7 +727,9 @@ def test_release_registry_probes_fail_closed_and_verify_immutable_digests() -> N
 
 def test_completed_release_verification_covers_identity_and_required_assets() -> None:
     jobs = _workflow_jobs((WORKFLOWS / "release.yml").read_text(encoding="utf-8"))
-    verify = _named_step(jobs["verify-existing"], "Verify published release surfaces")
+    workflow_step = _named_step(jobs["verify-existing"], "Verify published release surfaces")
+    assert "run: .github/scripts/verify-published-release.sh" in workflow_step
+    verify = PUBLISHED_VERIFIER.read_text(encoding="utf-8")
 
     assert _job_permissions(jobs["verify-existing"]) == {
         "attestations": "read",
@@ -752,7 +738,8 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
     assert "Install Cosign" in jobs["verify-existing"]
     assert 'git cat-file -t "refs/tags/${TAG}"' in verify
     assert 'git rev-parse --verify "refs/tags/${TAG}^{commit}"' in verify
-    assert ".draft == false and .immutable == true and .prerelease == $prerelease" in verify
+    for condition in (".draft == false", ".immutable == true", ".prerelease == $prerelease"):
+        assert condition in verify
     assert 'gh release download "${TAG}"' in verify
     assert "--clobber" in verify
     for asset in (
@@ -784,12 +771,12 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
     ):
         assert asset in verify
     assert 'test "${published_digest}" = "${released_digest}"' in verify
-    assert 'test "$(<release-assets/image-reference.txt)" = "${IMAGE}@${image_digest}"' in verify
+    assert 'test "$(<"${assets}/image-reference.txt")" = "${IMAGE}@${image_digest}"' in verify
     assert 'grep -Fxq "version: ${VERSION}"' in verify
     assert 'grep -Fxq "appVersion: ${VERSION}"' in verify
-    assert "release-assets/chart-reference.txt" in verify
+    assert "${assets}/chart-reference.txt" in verify
     assert 'retry helm pull "oci://${chart_reference}"' in verify
-    assert '"release-assets/extra-codeowners-${VERSION}.tgz"' in verify
+    assert '"${assets}/extra-codeowners-${VERSION}.tgz"' in verify
     assert ".github/scripts/verify-release-provenance.sh" in verify
 
 
