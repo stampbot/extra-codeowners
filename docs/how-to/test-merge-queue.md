@@ -17,10 +17,11 @@ The next PR needs its own result.
   [GitHub Merge Queue][github-queue]. Use an App registration you can change.
   Limit that installation to the test repository and its organization-policy
   repository. Each deployment can opt in one repository for candidate checks.
-- For a disposable test, use a release that includes candidate rechecks,
-  starting with [alpha.115][alpha]. Follow the [upgrade guide](upgrade.md)
-  if you have an existing database. Keep a valid `CODEOWNERS` file and an
-  eligible human owner for the path you'll test.
+- Use a prerelease that publishes a separate candidate check. The earlier
+  alpha tests used a shared check name, so those runs don't establish the
+  behavior of this setup. Follow the [upgrade guide](upgrade.md) if you have
+  an existing database. Keep a valid `CODEOWNERS` file and an eligible human
+  owner for the path you'll test.
 - Arrange access to the App's settings and delivery log and to the rulesets
   that apply to the test branch. Record those rules before editing them,
   including organization rules, bypass actors, and other required checks.
@@ -42,7 +43,8 @@ different interval in your deployment. For Helm, set both variables in
 
 Verify service readiness and run the normal
 [policy tests](configure.md#5-test-the-boundary) before changing any rule.
-Record the configured check name and the numeric ID of the App that posts it.
+Record the App's numeric ID. It posts `Extra CODEOWNERS / merge candidate`
+only on queue candidates. The ordinary PR-head check has a different name.
 The App doesn't need permission to submit reviews or merge.
 
 ## 2. Set and verify the queue rules
@@ -53,7 +55,9 @@ at least one ordinary approval. Leave existing checks and restrictions in
 place. Every required CI check must report on GitHub's candidate commit, not
 only the PR head. For GitHub Actions, add the `merge_group` trigger.
 
-Require the queue and the Extra CODEOWNERS check from the installed App.
+In the disposable repo, require the queue and
+`Extra CODEOWNERS / merge candidate` from the installed App. Don't require
+the ordinary Extra CODEOWNERS PR-head check.
 Set the queue to squash merging, one build slot, a minimum and maximum of
 one PR per merge, and **Only merge non-failing pull requests**. Allow no
 bypass actors. Set the status check timeout long enough for candidate checks
@@ -61,6 +65,10 @@ to finish. Verify the App as the expected source before you disable
 native code-owner review on the disposable branch. If the rules span multiple
 settings, keep native review active until the queue and App check are
 confirmed. Don't change the review count.
+
+First check that GitHub admits an eligible PR without the candidate check on
+its head. If it doesn't, stop the test and restore the original rules. Don't
+post a placeholder candidate check on the PR head to make it enter the queue.
 
 To inspect active rules, run this read-only command in Bash from any
 directory with `gh` and `jq` installed. Authenticate `gh` to GitHub.com
@@ -158,7 +166,6 @@ progress, don't assume that a rule change can cancel it.
 
 Clearing the settings or taking away access doesn't erase checks GitHub already recorded. In the [native-review handback test](../maintainers/evidence/2026-11-23-native-review-restored-with-queue.md), GitHub refused to queue a PR without code-owner review. The App check still passed, and Stampbot's approval was still on the PR.
 
-[alpha]: https://github.com/stampbot/extra-codeowners/releases/tag/v0.1.0-alpha.115
 [github-queue]: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue
 [github-rules]: https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch
 [merge-group-event]: https://docs.github.com/en/webhooks/webhook-events-and-payloads#merge_group

@@ -1,5 +1,31 @@
 # Runtime vulnerability review
 
+## Remaining November OpenSSL matches: November 27, 2026 UTC
+
+The [alpha.122 rescan][nov27-rescan] left five matches across the two
+wheel-bundled OpenSSL copies. The libraries are still present and unpatched.
+The new statements cover the default service on Linux amd64 and arm64.
+
+Two advisories, [CVE-2026-88823][nov10] and [CVE-2026-95692][nov10],
+require AES-GCM-SIV. Libpq connects as a stream-TLS client. The cipher
+tables in [OpenSSL 3.5.9][tls35] and [4.0.3][tls40] don't offer AES-GCM-SIV.
+The App only uses the Cryptography copy to load its configured RSA key and
+sign RS256 tokens. It doesn't use the library's symmetric cipher API.
+
+[CVE-2026-121481][nov-base64] requires passing nearly 2 GiB to OpenSSL's
+Base64 encoder. JWT assembly uses Python's Base64 encoder for small token
+fields. The service doesn't send request or GitHub response bodies through
+the native encoder. The [native caller receipt](native-november-callers.json)
+binds both copies to the locked wheel payloads.
+
+The approval and release changes in this review add no cipher, key-loading
+or native Base64 call site. These exclusions don't apply to operator commands,
+custom providers, or other native callers.
+
+[nov27-rescan]: https://github.com/stampbot/extra-codeowners/actions/runs/45972016310
+[tls35]: https://github.com/openssl/openssl/blob/openssl-3.5.9/ssl/s3_lib.c
+[tls40]: https://github.com/openssl/openssl/blob/openssl-4.0.3/ssl/s3_lib.c
+
 ## Candidate rechecks: November 23, 2026 UTC
 
 The candidate timer reuses the GitHub client, policy evaluation, and
@@ -51,7 +77,7 @@ pass a null stack to the affected reader. Cryptography uses its Rust PEM
 parser for the configured private key. This isn't an exclusion for TLS
 certificate parsing in general.
 
-Five pairs still have no exclusion: [CVE-2026-88823][nov10] and
+That review left five pairs without an exclusion: [CVE-2026-88823][nov10] and
 [CVE-2026-95692][nov10] on both copies, and [CVE-2026-121481][nov-base64]
 on 4.0.3. The review does not establish their reachability.
 The libraries remain present and unpatched. The assessment covers the

@@ -53,6 +53,7 @@ from extra_codeowners.merge_queue_paths import (
     MergeTreeEvidenceError,
     changed_paths,
     commit_tree_id,
+    immediate_tree_entry,
     require_object_id,
 )
 from extra_codeowners.metrics import (
@@ -2184,6 +2185,53 @@ class GitHubClient:
             msg = "CODEOWNERS errors response contained a malformed error"
             raise GitHubError(msg)
         return errors
+
+    async def get_regular_file_text(
+        self,
+        installation_id: int,
+        repository: str,
+        path: str,
+        *,
+        ref: str | None = None,
+        max_bytes: int = MAX_CONFIG_BYTES,
+    ) -> str | None:
+        """Read a regular file at one commit; the Contents API alone follows symlinks."""
+        if ref is None:
+            metadata = await self.get_repository(installation_id, repository)
+            default_branch = metadata.get("default_branch")
+            if not isinstance(default_branch, str):
+                raise GitHubError("policy repository omitted its default branch")
+            ref = await self.get_branch_head(installation_id, repository, default_branch)
+        try:
+            require_object_id(ref)
+            commit = await self._get_bounded_json(
+                f"/repos/{repository}/git/commits/{ref}",
+                installation_id,
+                max_bytes=MAX_MERGE_COMMIT_RESPONSE_BYTES,
+            )
+            tree_id = commit_tree_id(commit, ref)
+            parts = path.split("/")
+            for index, name in enumerate(parts):
+                tree = await self._get_bounded_json(
+                    f"/repos/{repository}/git/trees/{tree_id}",
+                    installation_id,
+                    max_bytes=MAX_MERGE_TREE_RESPONSE_BYTES,
+                )
+                entry = immediate_tree_entry(tree, tree_id, name)
+                if entry is None:
+                    return None
+                mode, tree_id = entry
+                allowed_modes = {"100644", "100755"} if index == len(parts) - 1 else {"040000"}
+                if mode not in allowed_modes:
+                    raise GitHubError("policy paths must name regular files in regular directories")
+        except MergeTreeEvidenceError as error:
+            raise GitHubError("GitHub did not prove the policy file's Git object type") from error
+        content = await self.get_file_text(
+            installation_id, repository, path, ref=ref, max_bytes=max_bytes
+        )
+        if content is None:
+            raise GitHubError("GitHub could not read the regular policy file found in the tree")
+        return content
 
     async def get_file_text(
         self,

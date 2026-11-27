@@ -723,7 +723,7 @@ class EvaluationService:
         self, installation_id: int, repository: str, base_sha: str
     ) -> tuple[str, str] | None:
         for path in CODEOWNERS_LOCATIONS:
-            content = await self.github.get_file_text(
+            content = await self.github.get_regular_file_text(
                 installation_id,
                 repository,
                 path,
@@ -752,7 +752,7 @@ class EvaluationService:
                 "available to this GitHub App installation; confirm that it exists, add it to the "
                 "installation's repository selection, and re-evaluate"
             )
-        org_text = await self.github.get_file_text(
+        org_text = await self.github.get_regular_file_text(
             installation_id,
             organization_repository,
             self.settings.policy_path,
@@ -765,7 +765,7 @@ class EvaluationService:
         repository: str,
         base_sha: str,
     ) -> str | None:
-        return await self.github.get_file_text(
+        return await self.github.get_regular_file_text(
             installation_id,
             repository,
             self.settings.policy_path,
@@ -1705,10 +1705,10 @@ class EvaluationService:
         }
         return open_head_pulls == {job.pull_number}
 
-    async def evaluate_job(self, job: ClaimedJob) -> None:
-        """Evaluate a leased job and publish only against stable PR revisions."""
+    async def evaluate_job(self, job: ClaimedJob) -> bool:
+        """Return whether the job reached a result or a safe terminal skip."""
         if self.settings.is_organization_config_repository(job.repository_full_name):
-            return
+            return True
         with EVALUATION_SECONDS.time():
             pull = await self.github.get_pull(
                 job.installation_id, job.repository_full_name, job.pull_number
@@ -1728,7 +1728,7 @@ class EvaluationService:
                     canonical_repository=canonical_repository,
                     pull_number=job.pull_number,
                 )
-                return
+                return True
             head_sha = _required_string(head.get("sha"), "pull_request.head.sha")
             base_sha = _required_string(base.get("sha"), "pull_request.base.sha")
             base_ref = _required_string(base.get("ref"), "pull_request.base.ref")
@@ -1741,12 +1741,12 @@ class EvaluationService:
                     pull.get("html_url") if isinstance(pull.get("html_url"), str) else None
                 )
                 await self._finish_closed_pull_check(job, check_head, details_url)
-                return
+                return True
 
             # This hint only schedules the fence covering this PR. Every
             # authorization/publication guard still uses fresh GitHub evidence.
             if not await asyncio.to_thread(self.store.observe_evaluation_base, job, base_ref):
-                return
+                return False
 
             if job.head_sha_hint is not None and job.head_sha_hint != head_sha:
                 await asyncio.to_thread(
@@ -1761,10 +1761,10 @@ class EvaluationService:
                         base_ref_hint=base_ref if len(base_ref) <= 255 else None,
                     ),
                 )
-                return
+                return False
             bound_job = await asyncio.to_thread(self.store.bind_claim_to_head, job, head_sha)
             if bound_job is None:
-                return
+                return False
             job = bound_job
 
             managed_check = await self.github.has_check_run(
@@ -1785,7 +1785,7 @@ class EvaluationService:
                     policy_sha,
                 )
                 if repository_text is None:
-                    return
+                    return True
             details_url = pull.get("html_url") if isinstance(pull.get("html_url"), str) else None
             external_id = f"{job.repository_full_name}#{job.pull_number}@{head_sha}"
             scheduled_recheck = job.keeps_published_check
@@ -1795,7 +1795,7 @@ class EvaluationService:
             # stale success visible while GitHub or the database is unavailable.
             async with self._check_write_guard(job.installation_id, head_sha):
                 if not await asyncio.to_thread(self.store.is_current_claim, job):
-                    return
+                    return False
                 if not await asyncio.to_thread(
                     self.store.shared_head_generation_is_current,
                     job,
@@ -1827,7 +1827,7 @@ class EvaluationService:
                         raise SharedHeadInvalidationPendingError(
                             "shared-head generation changed while rebinding evaluation"
                         )
-                    return
+                    return False
                 if not scheduled_recheck:
                     await self.github.upsert_check_run(
                         job.installation_id,
@@ -1912,7 +1912,7 @@ class EvaluationService:
                 raise GitHubError(f"GitHub returned unknown pull request state {current_state!r}")
             if current_state == "closed":
                 await self._finish_closed_pull_check(job, head_sha, details_url)
-                return
+                return True
             pull_changed = (
                 current_head_sha != head_sha
                 or current_base_sha != base_sha
@@ -1951,9 +1951,9 @@ class EvaluationService:
                         base_ref_hint=(current_base_ref if len(current_base_ref) <= 255 else None),
                     ),
                 )
-                return
+                return False
 
-            await self._publish_assessment(
+            return await self._publish_assessment(
                 job,
                 _CheckPublication(head_sha, base_ref, external_id, details_url),
                 _Assessment(result, base_fingerprint),
@@ -1961,7 +1961,7 @@ class EvaluationService:
 
     async def _publish_assessment(
         self, job: ClaimedJob, publication: _CheckPublication, assessment: _Assessment
-    ) -> None:
+    ) -> bool:
         """Publish stable evidence under the existing authority and check-write fences."""
         head_sha = publication.head_sha
         base_ref = publication.base_ref
@@ -1991,13 +1991,13 @@ class EvaluationService:
                 # arrives while this lock is held, its revocation PATCH is
                 # ordered after this completion, even if this process dies.
                 if not await asyncio.to_thread(self.store.is_current_claim, job):
-                    return
+                    return False
                 if not await asyncio.to_thread(
                     self.store.shared_head_generation_is_publishable,
                     job,
                     head_sha,
                 ):
-                    return
+                    return False
                 if await asyncio.to_thread(self.store.has_blocking_authority, job, base_ref):
                     raise AuthorityChangePendingError(
                         "accepted authority change arrived during evaluation"
@@ -2017,12 +2017,12 @@ class EvaluationService:
                     job,
                     head_sha,
                 ):
-                    return
+                    return False
                 # Authoritative shared-head discovery may require many
                 # GitHub reads. Fence a lease owner that expired or was
                 # replaced while those reads were in flight.
                 if not await asyncio.to_thread(self.store.is_current_claim, job):
-                    return
+                    return False
                 try:
                     await self.github.upsert_check_run(
                         job.installation_id,
@@ -2093,7 +2093,7 @@ class EvaluationService:
                         details_url,
                         external_id,
                     )
-                    return
+                    return False
 
             # If a trigger committed while the completion request was in
             # flight, restore a blocking state ourselves. The shared writer
@@ -2128,7 +2128,7 @@ class EvaluationService:
                             raise AuthorityChangePendingError(
                                 "accepted authority change arrived during check publication"
                             )
-                        return
+                        return False
 
         await asyncio.to_thread(
             self.store.record_audit,
@@ -2146,6 +2146,7 @@ class EvaluationService:
             },
         )
         EVALUATIONS.labels(result.conclusion.value).inc()
+        return True
 
 
 class Worker:
@@ -2405,7 +2406,7 @@ class Worker:
         done = asyncio.Event()
         heartbeat = asyncio.create_task(self._renew_lease(job, done), name=f"job-lease-{job.id}")
         try:
-            await self.evaluator.evaluate_job(job)
+            terminal = await self.evaluator.evaluate_job(job)
         except RecoveryBudgetDeferredError as error:
             await asyncio.to_thread(
                 self.store.defer,
@@ -2491,7 +2492,7 @@ class Worker:
             return "failed"
         else:
             try:
-                completed = await asyncio.to_thread(self.store.complete, job, owner)
+                completed = terminal and await asyncio.to_thread(self.store.complete, job, owner)
             except Exception:
                 # A Check Run can be correct while a database outage prevents
                 # the durable acknowledgment. Do not claim completion in logs

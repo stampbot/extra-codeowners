@@ -35,7 +35,7 @@ def test_native_vex_marks_only_the_two_verified_fixes_on_each_current_copy() -> 
 
 def test_november_native_exclusions_are_exactly_scoped() -> None:
     statements = [item for item in native_statements() if item["status"] != "fixed"]
-    assert len(statements) == 20
+    assert len(statements) == 25
     assert {(item["vulnerability"]["name"], item["products"][0]["@id"]) for item in statements} == {
         (f"CVE-2026-{cve}", f"pkg:generic/openssl@{version}")
         for cve in (
@@ -47,11 +47,13 @@ def test_november_native_exclusions_are_exactly_scoped() -> None:
             "35190",
             "84786",
             "88822",
+            "88823",
             "95690",
             "95691",
+            "95692",
         )
         for version in ("3.5.9", "4.0.3")
-    }
+    } | {("CVE-2026-121481", "pkg:generic/openssl@4.0.3")}
     for item in statements:
         assert len(item["products"]) == 1
         assert item["status"] == "not_affected"

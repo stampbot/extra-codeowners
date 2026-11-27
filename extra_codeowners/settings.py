@@ -19,6 +19,7 @@ from extra_codeowners.database import (
     isolated_postgresql_connect_args,
     normalize_repository_full_name,
 )
+from extra_codeowners.merge_queue import MERGE_CANDIDATE_CHECK_NAME
 
 MAX_SECRET_FILE_BYTES = 64 * 1024
 MAX_SECRET_SYMLINKS = 16
@@ -377,6 +378,8 @@ class Settings(BaseSettings):
         name = value.strip()
         if not name or len(name) > 255 or not name.isprintable():
             raise ValueError("check_name must be a printable value containing 1..255 characters")
+        if name.casefold() == MERGE_CANDIDATE_CHECK_NAME.casefold():
+            raise ValueError("check_name is reserved for the merge candidate worker")
         return name
 
     @model_validator(mode="after")

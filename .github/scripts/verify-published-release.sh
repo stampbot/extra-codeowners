@@ -61,57 +61,13 @@ download_assets() {
   gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir "${assets}" --clobber
 }
 retry download_assets
-python3 -I -B tools/published_release_assets.py "${metadata}" "${assets}" "${staged}"
+verify_args=(verify "${metadata}" "${assets}")
+if [[ -n "${staged}" ]]; then
+  verify_args+=(--staged "${staged}")
+fi
+python3 -I -B tools/published_release_assets.py "${VERSION}" "${PYTHON_VERSION}" "${verify_args[@]}"
 
 if [[ -z "${staged}" ]]; then
-  required_assets=(
-    "extra_codeowners-${PYTHON_VERSION}-py3-none-any.whl"
-    "extra_codeowners-${PYTHON_VERSION}-py3-none-any.whl.sigstore.json"
-    "extra_codeowners-${PYTHON_VERSION}.tar.gz"
-    "extra_codeowners-${PYTHON_VERSION}.tar.gz.sigstore.json"
-    "extra-codeowners-${VERSION}.tgz"
-    "extra-codeowners-${VERSION}.tgz.sigstore.json"
-    chart-reference.txt
-    build-index-amd64.txt
-    build-index-arm64.txt
-    digest-amd64.txt
-    digest-arm64.txt
-    image-reference.txt
-    "extra-codeowners-${VERSION}.openvex.json"
-    "extra-codeowners-${VERSION}.openvex.json.sigstore.json"
-    distribution-inventory-amd64.json
-    distribution-inventory-amd64.json.sigstore.json
-    recipient-notices-amd64.tar.gz
-    recipient-notices-amd64.tar.gz.sigstore.json
-    native-components-amd64.cdx.json
-    native-components-amd64.cdx.json.sigstore.json
-    cpython-source-amd64.tar.gz
-    cpython-source-amd64.tar.gz.sigstore.json
-    python-source-amd64.tar.gz
-    python-source-amd64.tar.gz.sigstore.json
-    rust-source-amd64.tar.gz
-    rust-source-amd64.tar.gz.sigstore.json
-    distribution-inventory-arm64.json
-    distribution-inventory-arm64.json.sigstore.json
-    recipient-notices-arm64.tar.gz
-    recipient-notices-arm64.tar.gz.sigstore.json
-    native-components-arm64.cdx.json
-    native-components-arm64.cdx.json.sigstore.json
-    cpython-source-arm64.tar.gz
-    cpython-source-arm64.tar.gz.sigstore.json
-    python-source-arm64.tar.gz
-    python-source-arm64.tar.gz.sigstore.json
-    rust-source-arm64.tar.gz
-    rust-source-arm64.tar.gz.sigstore.json
-    debian-source.tar
-    debian-source.tar.sigstore.json
-    vulnerability-report-amd64.json
-    vulnerability-report-arm64.json
-  )
-  for asset in "${required_assets[@]}"; do
-    test -f "${assets}/${asset}"
-  done
-
   retry docker buildx imagetools inspect "${IMAGE}:${VERSION}" >"${scratch}/image-manifest"
   manifest="$(<"${scratch}/image-manifest")"
   grep -Fq 'linux/amd64' <<<"${manifest}"

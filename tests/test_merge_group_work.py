@@ -12,7 +12,13 @@ import pytest
 from sqlalchemy import select
 
 import extra_codeowners.merge_group_work as candidate_work
-from extra_codeowners.database import JobRequest, QueueStore, WebhookDelivery, utcnow
+from extra_codeowners.database import (
+    AuthorityRequest,
+    JobRequest,
+    QueueStore,
+    WebhookDelivery,
+    utcnow,
+)
 from extra_codeowners.merge_queue import MergeCandidateIdentity, MergeGroupTrigger
 from extra_codeowners.migrations import upgrade_database
 
@@ -183,3 +189,32 @@ def test_review_delivery_requeues_bound_candidate_with_no_cross_repository_effec
     )
     third = queue.claim("new", 60)
     assert third is not None and third.generation == second.generation + 1
+
+
+@pytest.mark.parametrize(
+    ("branch", "reason", "still_current"),
+    [
+        ("docs", "push.repository_base", True),
+        ("main", "push.repository_base", False),
+        (None, "repository.edited", False),
+    ],
+)
+def test_candidate_invalidation_follows_authority_scope(
+    replica_pair: tuple[QueueStore, QueueStore],
+    branch: str | None,
+    reason: str,
+    still_current: bool,
+) -> None:
+    # Verifies XCO-017: only relevant authority changes should interrupt a candidate.
+    ingress, worker = replica_pair
+    assert ingress.accept_delivery("queued", "merge_group", TRIGGER)
+    queue = candidate_work.MergeGroupQueue(worker)
+    job = queue.claim("replica", 60)
+    assert job is not None
+    assert ingress.accept_delivery(
+        "authority",
+        "push" if branch is not None else "repository",
+        AuthorityRequest(TRIGGER.installation_id, TRIGGER.repository, branch, reason),
+        invalidate_merge_groups=True,
+    )
+    assert queue.is_current(job) is still_current

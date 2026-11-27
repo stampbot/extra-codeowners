@@ -7,6 +7,48 @@ WEBHOOKS = Counter(
     "Verified GitHub webhook deliveries",
     ("event", "action"),
 )
+_WEBHOOK_ACTION_LABELS = {
+    "check_run": {"completed", "created", "requested_action", "rerequested"},
+    "installation": {"created", "deleted", "new_permissions_accepted", "suspend", "unsuspend"},
+    "installation_repositories": {"added", "removed"},
+    "installation_target": {"renamed"},
+    "label": {"created", "deleted", "edited"},
+    "member": {"added", "edited", "removed"},
+    "membership": {"added", "removed"},
+    "merge_group": {"checks_requested", "destroyed"},
+    "organization": {"deleted", "member_added", "member_invited", "member_removed", "renamed"},
+    "ping": set(),
+    "pull_request": {
+        "closed",
+        "converted_to_draft",
+        "edited",
+        "labeled",
+        "opened",
+        "ready_for_review",
+        "reopened",
+        "review_request_removed",
+        "review_requested",
+        "synchronize",
+        "unlabeled",
+    },
+    "pull_request_review": {"dismissed", "edited", "submitted"},
+    "push": set(),
+    "repository": {"deleted", "edited", "renamed", "transferred", "unarchived"},
+    "team": {"added_to_repository", "created", "deleted", "edited", "removed_from_repository"},
+    "team_add": set(),
+}
+
+
+def record_webhook(event: str, action: str) -> None:
+    """Count a verified delivery without turning arbitrary values into metric labels."""
+    known_actions = _WEBHOOK_ACTION_LABELS.get(event)
+    if known_actions is None:
+        WEBHOOKS.labels("other", "other").inc()
+    else:
+        action_label = action if action in known_actions else ("other" if action else "received")
+        WEBHOOKS.labels(event, action_label).inc()
+
+
 WEBHOOK_FAILURES = Counter(
     "extra_codeowners_webhook_failures_total",
     "Rejected or failed GitHub webhook deliveries",

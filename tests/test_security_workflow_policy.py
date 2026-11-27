@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tools.published_release_assets import expected_assets, validate_staged_assets, verify_assets
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 PUBLISHED_VERIFIER = ROOT / ".github" / "scripts" / "verify-published-release.sh"
@@ -457,15 +459,11 @@ def test_release_publication_retry_verifies_the_completed_release_from_this_run(
     verifier = PUBLISHED_VERIFIER.read_text(encoding="utf-8")
     assert 'gh release download "${TAG}"' in verifier
     assert '--repo "${GITHUB_REPOSITORY}"' in verifier
-    assert "release artifacts have duplicate names" in create
-    assert "release artifact is missing or empty" in create
-    assert "Sigstore bundle is not a JSON object" in create
-    assert create.index("release artifacts have duplicate names") < create.index(
-        'gh release create "${TAG}" --draft'
-    )
+    assert create.index("stage release") < create.index('gh release create "${TAG}" --draft')
     assert "([.assets[].name] | length == (unique | length))" in verifier
     assert '(.digest | test("^sha256:[0-9a-f]{64}$"))' in verifier
-    assert 'tools/published_release_assets.py "${metadata}" "${assets}" "${staged}"' in verifier
+    assert 'tools/published_release_assets.py "${VERSION}" "${PYTHON_VERSION}"' in verifier
+    assert 'verify_args+=(--staged "${staged}")' in verifier
     assert "Release %s was published while this run was active" not in create
 
     published_case = create.split("published)", 1)[1].split(";;", 1)[0]
@@ -483,6 +481,14 @@ def _release_asset_metadata(name: str, contents: bytes) -> dict[str, object]:
         "name": name,
         "size": len(contents),
         "digest": f"sha256:{hashlib.sha256(contents).hexdigest()}",
+    }
+
+
+def _staged_release_fixture() -> dict[str, bytes]:
+    assets = expected_assets("0.1.0-alpha.8", "0.1.0a8")
+    return {
+        name: b'{"source": "current run"}\n' if name.endswith(".sigstore.json") else b"artifact\n"
+        for name in assets
     }
 
 
@@ -608,11 +614,10 @@ else:
 def test_published_release_recovery_accepts_matching_immutable_release(
     tmp_path: Path,
 ) -> None:
-    local = {
-        "extra_codeowners-0.1.0a8-py3-none-any.whl": b"wheel artifact\n",
-        "image.sigstore.json": b'{"source": "current run"}\n',
+    local = _staged_release_fixture()
+    remote = local | {
+        "extra_codeowners-0.1.0a8-py3-none-any.whl.sigstore.json": b'{"source": "published"}\n'
     }
-    remote = local | {"image.sigstore.json": b'{"source": "published release"}\n'}
 
     result, operations = _run_published_release_recovery(
         tmp_path,
@@ -635,7 +640,8 @@ def test_published_release_recovery_accepts_matching_immutable_release(
     ("failure", "expected_error"),
     (
         ("wrong", "does not match this run"),
-        ("missing", "API asset names do not match this run"),
+        ("missing", "missing: extra_codeowners-0.1.0a8-py3-none-any.whl"),
+        ("unexpected", "unexpected: other.tar"),
         ("duplicate", "Release postcondition attempt 3 is incomplete or inconsistent"),
         ("empty", "Release postcondition attempt 3 is incomplete or inconsistent"),
         ("digest", "has the wrong digest"),
@@ -647,16 +653,15 @@ def test_published_release_recovery_rejects_inconsistent_assets(
     expected_error: str,
     tmp_path: Path,
 ) -> None:
-    local = {
-        "extra_codeowners-0.1.0a8-py3-none-any.whl": b"wheel artifact\n",
-        "image.sigstore.json": b'{"source": "current run"}\n',
-    }
-    remote = local | {"image.sigstore.json": b'{"source": "published release"}\n'}
+    local = _staged_release_fixture()
+    remote = local.copy()
     api_assets: list[dict[str, object]] | None = None
     if failure == "wrong":
         remote["extra_codeowners-0.1.0a8-py3-none-any.whl"] = b"other artifact\n"
     elif failure == "missing":
         remote.pop("extra_codeowners-0.1.0a8-py3-none-any.whl")
+    elif failure == "unexpected":
+        remote["other.tar"] = b"unexpected fixture asset\n"
     elif failure == "duplicate":
         metadata = _release_asset_metadata(
             "extra_codeowners-0.1.0a8-py3-none-any.whl",
@@ -665,7 +670,6 @@ def test_published_release_recovery_rejects_inconsistent_assets(
         api_assets = [
             metadata,
             metadata,
-            _release_asset_metadata("image.sigstore.json", remote["image.sigstore.json"]),
         ]
     elif failure == "empty":
         remote["extra_codeowners-0.1.0a8-py3-none-any.whl"] = b""
@@ -690,6 +694,34 @@ def test_published_release_recovery_rejects_inconsistent_assets(
         )
         for operation in operations
     )
+
+
+def test_asset_inventory_rejects_unknown_assets_with_and_without_staging(tmp_path: Path) -> None:
+    assets = _staged_release_fixture()
+    expected = expected_assets("0.1.0-alpha.8", "0.1.0a8")
+    assert len(expected) == 42
+    for name, contents in assets.items():
+        (tmp_path / name).write_bytes(contents)
+
+    assert validate_staged_assets(tmp_path, expected).keys() == expected
+    extra = tmp_path / "other.tar"
+    extra.write_bytes(b"unexpected fixture asset\n")
+    with pytest.raises(ValueError, match=r"unexpected: other\.tar"):
+        validate_staged_assets(tmp_path, expected)
+
+    metadata = tmp_path.parent / f"{tmp_path.name}.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "assets": [
+                    _release_asset_metadata(name, contents)
+                    for name, contents in (assets | {extra.name: extra.read_bytes()}).items()
+                ]
+            }
+        )
+    )
+    with pytest.raises(ValueError, match=r"unexpected: other\.tar"):
+        verify_assets(metadata, tmp_path, expected)
 
 
 def test_release_registry_probes_fail_closed_and_verify_immutable_digests() -> None:
@@ -769,7 +801,8 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
         "vulnerability-report-amd64.json",
         "vulnerability-report-arm64.json",
     ):
-        assert asset in verify
+        name = asset.replace("${PYTHON_VERSION}", "1.0.0a2").replace("${VERSION}", "1.0.0-alpha.2")
+        assert name in expected_assets("1.0.0-alpha.2", "1.0.0a2")
     assert 'test "${published_digest}" = "${released_digest}"' in verify
     assert 'test "$(<"${assets}/image-reference.txt")" = "${IMAGE}@${image_digest}"' in verify
     assert 'grep -Fxq "version: ${VERSION}"' in verify

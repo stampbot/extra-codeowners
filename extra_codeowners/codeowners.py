@@ -59,6 +59,8 @@ def validate_pattern(pattern: str) -> str:
     segments = without_anchor.rstrip("/").split("/")
     if any(segment in {"", ".", ".."} for segment in segments):
         raise ValueError("pattern must not contain empty, '.' or '..' path segments")
+    if any(len(segment) > 2 and not segment.strip("*") for segment in segments):
+        raise ValueError("a recursive wildcard component must be exactly '**'")
     return value
 
 
@@ -79,17 +81,23 @@ def _pattern_regex(pattern: str) -> re.Pattern[str]:
     while index < len(value):
         character = value[index]
         if character == "*":
-            if index + 1 < len(value) and value[index + 1] == "*":
-                index += 2
-                while index < len(value) and value[index] == "*":
-                    index += 1
-                if index < len(value) and value[index] == "/":
-                    translated.append("(?:.*/)?")
-                    index += 1
-                else:
-                    translated.append(".*")
-                continue
-            translated.append("[^/]*")
+            end = index + 1
+            while end < len(value) and value[end] == "*":
+                end += 1
+            recursive = (
+                end - index == 2
+                and (index == 0 or value[index - 1] == "/")
+                and (end == len(value) or value[end] == "/")
+            )
+            if not recursive:
+                translated.append("[^/]*")
+            elif end == len(value):
+                translated.append(".*")
+            else:
+                translated.append("(?:.*/)?")
+                end += 1
+            index = end
+            continue
         elif character == "?":
             translated.append("[^/]")
         else:

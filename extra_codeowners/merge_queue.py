@@ -18,6 +18,7 @@ _INVALID_REF = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]|\.\.|@\{")
 
 MAX_MERGE_QUEUE_ENTRIES = 100
 MAX_MERGE_QUEUE_BRANCH_RULES = 100
+MERGE_CANDIDATE_CHECK_NAME = "Extra CODEOWNERS / merge candidate"
 
 QUEUE_CANDIDATE_QUERY = """\
 query QueueCandidate(
