@@ -5,6 +5,22 @@ release line. Alpha releases are not supported production artifacts. Read
 every entry after the version you run, through the version you plan to deploy.
 Any change to the Alembic head must update this ledger in the same pull request.
 
+## 1.0.0
+
+The release after `1.0.0-alpha.2` changes the database head from
+`0012_merge_candidate_recheck` to `0013_merge_group_lifecycle` (compatibility
+marker `12`). It keeps retired candidates out of the active queue. It also
+stores the original due time of a candidate recheck so a retry doesn't hide
+how late it is. The migration copies each existing recheck's next attempt time
+to its due time. It doesn't infer which older candidates were retired.
+
+If a deployment supplies required candidate checks, empty those queues and
+restore native review first. Verify a backup, then [drain ingress and older
+workers](../how-to/upgrade.md#drain-a-kubernetes-release) before applying
+the migration. Run the new image's `database check` before starting workers.
+The old image won't start against the new head. To roll back, restore the
+verified pre-migration backup.
+
 ## 0.1.0
 
 **Status:** Applies to the `0.1.0-alpha.N` release series.

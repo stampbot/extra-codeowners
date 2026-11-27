@@ -436,6 +436,7 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
             "enabled": False,
             "labels": {"severity": "warning"},
             "interactiveQueueStalledSeconds": 60,
+            "candidateQueueStalledSeconds": 120,
             "reconciliationStalledSeconds": 900,
         },
         "dashboard": {
@@ -565,6 +566,8 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     ).read_text()
     assert ".Values.monitoring.prometheusRule.enabled" in prometheus_rule
     assert "ExtraCodeownersInteractiveQueueStalled" in prometheus_rule
+    assert "ExtraCodeownersCandidateQueueStalled" in prometheus_rule
+    assert 'queue_work_class_oldest_age_seconds{kind="candidate"}' in prometheus_rule
     dashboard = (ROOT / "charts" / "extra-codeowners" / "templates" / "dashboard.yaml").read_text()
     assert ".Values.monitoring.dashboard.enabled" in dashboard
     assert ".Values.monitoring.dashboard.labels" in dashboard

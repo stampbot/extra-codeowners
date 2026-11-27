@@ -578,11 +578,23 @@ not interrupt an active scan or bound how long an old success remains visible.
 Neither setting makes the system strongly consistent. This reconciler does
 not discover merge queue candidates. A separate worker reads `merge_group`
 deliveries for one explicitly configured repository per deployment.
+Before a PR can enter that queue, GitHub looks for the required App check on
+its test merge. The PR worker uses fresh policy evidence and verifies that
+the test merge names the evaluated target and PR head as its two parents.
+It publishes the admission result on that commit, not on the raw PR head.
+The candidate worker uses the same check name on a different commit. The
+two writers verify the role before updating an existing check.
+
 The worker checks the effective branch rule and the full queue snapshot. It
 requires squash merging, one build slot, one PR per merge, and `ALLGREEN`.
 Only the first entry can have a candidate; any later entry must still be
 waiting without a base or candidate commit. Missing rules, a partial list,
 or a second built candidate blocks publication.
+
+When a waiting PR reaches the front, GitHub can still report its original base
+SHA on the PR record. The candidate worker verifies the live branch and the
+queue entry's base instead. It reads policy at that commit and checks that
+reviewed paths cover the squash candidate's changes relative to it.
 
 That worker also schedules rechecks of passes it confirmed. The database
 holds the Check Run ID and due time, so one replica claims a recheck and a
@@ -591,6 +603,13 @@ If the evidence no longer supports the pass, or a first attempt can't prove
 it, the worker tries to revoke the same Check Run. It does not create or
 restore a passing check from a timer. A confirmed closed PR is history;
 the timer retires without a write.
+
+Retirement keeps a terminal row for that commit, so a delayed webhook or an
+authority refresh can't turn old history back into live work. A verified
+replacement on the same ref can retire a candidate that never had a check.
+A missing or incomplete provider response doesn't do that. Candidate
+metrics count pending events, withdrawals, and due rechecks separately. A
+retry can move the next attempt without moving the original due time.
 
 The [serial queue decision](adrs/2026-11-25-require-a-serial-merge-queue.md)
 explains why the check on that candidate is needed for enforcement.
@@ -640,6 +659,17 @@ and then:
 
 That network-free boundary makes property tests and adversarial fixtures
 practical. It also gives future distributions one semantic core to reuse.
+
+When collecting human evidence, the service checks repository access once
+for each team that owns a changed path. It checks membership for each
+reviewer or eligible author separately. Both names of a rename count.
+The next assessment reads team access again rather than reusing cached
+permission across pull requests or review events.
+
+When a parallel evidence read fails, the worker cancels and waits for the
+other reads. The REST client stores any rate limit it already received, so
+another replica knows to pause even if the assessment no longer needs that
+response.
 
 The Python modules are not a stable public API before 1.0. A future Action or
 hosted service should call an intentionally versioned interface rather than

@@ -44,6 +44,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.selectable import Subquery
 
 from extra_codeowners.database_audit import EvaluationAudit, record_audit
 from extra_codeowners.database_metadata import Base as Base
@@ -52,8 +53,8 @@ from extra_codeowners.database_schema import validate_database_schema_contract
 from extra_codeowners.merge_queue import MergeGroupTrigger
 from extra_codeowners.trace_context import TrustedTraceContext
 
-SCHEMA_VERSION = 11
-DATABASE_MIGRATION_HEAD = "0012_merge_candidate_recheck"
+SCHEMA_VERSION = 12
+DATABASE_MIGRATION_HEAD = "0013_merge_group_lifecycle"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -298,7 +299,13 @@ class MergeGroupWork(Base):
 
     __tablename__ = "merge_group_work"
     __table_args__ = (
-        Index("ix_merge_group_claim", "available_at", "lease_until"),
+        Index(
+            "ix_merge_group_claim",
+            "available_at",
+            "lease_until",
+            sqlite_where=text("completed_generation < generation"),
+            postgresql_where=text("completed_generation < generation"),
+        ),
         Index("ix_merge_group_pull", "installation_id", "repository_full_name", "pull_number"),
         Index(
             "ix_merge_group_recheck",
@@ -327,6 +334,8 @@ class MergeGroupWork(Base):
     pull_id: Mapped[str | None] = mapped_column(String(256))
     pull_head_sha: Mapped[str | None] = mapped_column(String(40))
     recheck_check_id: Mapped[int | None] = mapped_column(BigInteger)
+    recheck_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     completed_generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     attempts: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -383,7 +392,7 @@ def _enqueue_merge_group(session: Session, request: MergeGroupTrigger) -> None:
         work.head_ref,
     ) != requested_identity:
         raise RuntimeError("merge group delivery disagrees with the recorded candidate identity")
-    if not work.destroyed:
+    if not work.destroyed and work.retired_at is None:
         work.destroyed = destroyed
         work.generation += 1
         work.attempts = 0
@@ -391,7 +400,6 @@ def _enqueue_merge_group(session: Session, request: MergeGroupTrigger) -> None:
         work.available_at = now
         work.lease_owner = None
         work.lease_until = None
-        work.recheck_check_id = None
 
 
 def _requeue_merge_groups(
@@ -406,6 +414,7 @@ def _requeue_merge_groups(
     scope = [
         MergeGroupWork.installation_id == installation_id,
         MergeGroupWork.destroyed.is_(False),
+        MergeGroupWork.retired_at.is_(None),
     ]
     if repository is not None:
         scope.append(MergeGroupWork.repository_full_name == repository)
@@ -423,9 +432,35 @@ def _requeue_merge_groups(
             attempts=0,
             lease_owner=None,
             lease_until=None,
-            recheck_check_id=None,
         )
     )
+
+
+def _merge_group_backlog(now: datetime) -> Subquery:
+    # Keep the two indexed active sets separate so gauges needn't scan history.
+    events = select(
+        case(
+            (
+                or_(MergeGroupWork.destroyed.is_(True), MergeGroupWork.recheck_check_id > 0),
+                "withdrawal",
+            ),
+            else_="event",
+        ).label("work_class"),
+        MergeGroupWork.requested_at.label("queued_at"),
+    ).where(
+        MergeGroupWork.completed_generation < MergeGroupWork.generation,
+        MergeGroupWork.retired_at.is_(None),
+    )
+    rechecks = select(
+        literal("recheck").label("work_class"),
+        MergeGroupWork.recheck_due_at.label("queued_at"),
+    ).where(
+        MergeGroupWork.recheck_check_id > 0,
+        MergeGroupWork.completed_generation == MergeGroupWork.generation,
+        MergeGroupWork.retired_at.is_(None),
+        MergeGroupWork.recheck_due_at <= now,
+    )
+    return events.union_all(rechecks).subquery()
 
 
 class ServiceLease(Base):
@@ -3327,7 +3362,11 @@ class QueueStore:
                 )
                 or 0
             )
-            return evaluations + authorities + shared_heads
+            candidates = int(
+                session.scalar(select(func.count()).select_from(_merge_group_backlog(utcnow())))
+                or 0
+            )
+            return evaluations + authorities + shared_heads + candidates
 
     def pending_work_class_snapshot(self) -> dict[tuple[str, str], tuple[int, datetime | None]]:
         """Return cheap, low-cardinality queue state for Prometheus sampling."""
@@ -3371,6 +3410,16 @@ class QueueStore:
                     int(authority_count),
                     authority_oldest,
                 )
+            backlog = _merge_group_backlog(utcnow())
+            candidates = session.execute(
+                select(backlog.c.work_class, func.count(), func.min(backlog.c.queued_at)).group_by(
+                    backlog.c.work_class
+                )
+            )
+            for work_class, count, oldest in candidates:
+                if oldest is not None and oldest.tzinfo is None:
+                    oldest = oldest.replace(tzinfo=UTC)
+                snapshot[("candidate", str(work_class))] = (int(count), oldest)
         return snapshot
 
     def pending_shared_head_invalidation_count(self) -> int:

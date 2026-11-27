@@ -178,9 +178,9 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_github_discovery_cache_bytes` | gauge | Accounted storage bytes retained by this process's GitHub client, including encoded bodies where smaller, labeled by `cache` (`pages` or `compact`). Not total process memory. |
 | `extra_codeowners_github_discovery_cache_entries` | gauge | Cached representations retained by the same client and cache partition. |
 | `extra_codeowners_github_discovery_cache_events_total` | counter | Cache retention decisions, labeled by `cache` and fixed `event`: `stored`, `expired`, `evicted_bytes`, `evicted_entries`, `rejected_size`, `rejected_metadata`, `rejected_encoding`, `skipped_no_validator`, `skipped_no_store`, or `skipped_vary`. |
-| `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
+| `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, authority fan-out, and merge-candidate work. Future candidate timers do not count. |
 | `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
-| `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. |
+| `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. For `kind="candidate"`, `work_class` is `event`, `withdrawal`, or `recheck`. Recheck age starts at the original due time, even if a retry is delayed. |
 | `extra_codeowners_queue_wait_seconds` | histogram | Time a ready work attempt waits before a worker starts it, labeled by kind and work class. Retry backoff is not included. |
 | `extra_codeowners_webhook_to_check_completion_seconds` | histogram | Time from the work item's queue timestamp to completed evaluation, labeled by work class. A queue handoff can reset that timestamp; this is not necessarily time since the original webhook receipt. |
 | `extra_codeowners_shared_head_invalidation_depth` | gauge | Exact commit generations whose durable Check Run invalidation has not finished. |

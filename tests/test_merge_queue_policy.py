@@ -129,17 +129,33 @@ async def test_candidate_uses_existing_policy_and_does_not_publish(
     assessment_stack: tuple[EvaluationService, Mock, Mock],
 ) -> None:
     service, github, store = assessment_stack
-    assessment = await service.assess_merge_candidate(IDENTITY.trigger, authority_generation=8)
+    assessment = await service.assess_merge_candidate(IDENTITY, authority_generation=8)
     assert assessment.identity == IDENTITY
     assert assessment.result.conclusion is EvaluationConclusion.SUCCESS
     github.get_candidate_changed_paths.assert_awaited_once_with(
         10, REPO, target_sha=BASE, candidate_sha=CANDIDATE
     )
     github.get_codeowners_errors.assert_awaited_once_with(10, REPO, BASE)
-    github.get_merge_candidate.assert_awaited_with(IDENTITY.trigger)
-    assert github.get_merge_candidate.await_count == github.get_pull.await_count == 2
+    github.get_merge_candidate.assert_awaited_once_with(IDENTITY.trigger)
+    assert github.get_pull.await_count == 2
     github.upsert_check_run.assert_not_called()
     assert store.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_later_queue_entry_uses_live_candidate_base_not_recorded_pr_base(
+    assessment_stack: tuple[EvaluationService, Mock, Mock],
+) -> None:
+    service, github, _ = assessment_stack
+    queued_pull = pull()
+    queued_pull["base"]["sha"] = EARLIER
+    github.get_pull.return_value = queued_pull
+    assessment = await service.assess_merge_candidate(IDENTITY, authority_generation=8)
+    assert assessment.result.conclusion is EvaluationConclusion.SUCCESS
+    github.get_candidate_changed_paths.assert_awaited_once_with(
+        10, REPO, target_sha=BASE, candidate_sha=CANDIDATE
+    )
+    github.get_codeowners_errors.assert_awaited_once_with(10, REPO, BASE)
 
 
 @pytest.mark.asyncio
@@ -153,7 +169,7 @@ async def test_candidate_refuses_a_review_for_any_other_commit(
         review("first-owner", 1, PULL_HEAD),
         review("second-owner", 2, bad_commit),
     ]
-    result = await service.assess_merge_candidate(IDENTITY.trigger, authority_generation=8)
+    result = await service.assess_merge_candidate(IDENTITY, authority_generation=8)
     assert result.result.conclusion is EvaluationConclusion.FAILURE
 
 
@@ -163,7 +179,7 @@ async def test_candidate_fails_on_a_dismissed_approval(
 ) -> None:
     service, github, _ = assessment_stack
     github.get_reviews.return_value.append(review("second-owner", 3, PULL_HEAD, state="DISMISSED"))
-    result = await service.assess_merge_candidate(IDENTITY.trigger, authority_generation=8)
+    result = await service.assess_merge_candidate(IDENTITY, authority_generation=8)
     assert result.result.conclusion is EvaluationConclusion.FAILURE
 
 
@@ -180,13 +196,13 @@ async def test_unreviewed_relative_paths_deny_candidate(
     )
     if bad_paths == {OLD_PATH}:
         github.get_pull_files.return_value = [{"status": "unchanged", "filename": OLD_PATH}]
-    result = await service.assess_merge_candidate(IDENTITY.trigger, authority_generation=8)
+    result = await service.assess_merge_candidate(IDENTITY, authority_generation=8)
     assert result.result.conclusion is EvaluationConclusion.FAILURE
     assert result.result.errors[0].code == "candidate_paths_not_covered"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("changes", ["entry", "labels", "head", "route", "policy_base"])
+@pytest.mark.parametrize("changes", ["entry", "labels", "head", "route", "base_branch"])
 async def test_mid_assessment_changes_discard_result(
     assessment_stack: tuple[EvaluationService, Mock, Mock], changes: str
 ) -> None:
@@ -195,7 +211,7 @@ async def test_mid_assessment_changes_discard_result(
     first = pull()
     second = deepcopy(first)
     if changes == "entry":
-        github.get_merge_candidate.side_effect = [IDENTITY, replace(IDENTITY, entry_id="MQE_other")]
+        github.get_merge_candidate.return_value = replace(IDENTITY, entry_id="MQE_other")
     elif changes == "labels":
         second["labels"] = [{"name": "explicit-approval"}]
     elif changes == "head":
@@ -203,12 +219,12 @@ async def test_mid_assessment_changes_discard_result(
     elif changes == "route":
         second["base"]["repo"]["id"] = 99
     else:
-        second["base"]["sha"] = EARLIER
+        second["base"]["ref"] = "other-branch"
     github.get_pull.side_effect = [first, second]
     with pytest.raises(
         (GitHubError, MergeQueueEvidenceError), match=r"changed|current queue entry"
     ):
-        await service.assess_merge_candidate(IDENTITY.trigger, authority_generation=8)
+        await service.assess_merge_candidate(IDENTITY, authority_generation=8)
 
 
 @pytest.mark.asyncio
@@ -221,7 +237,7 @@ async def test_candidate_path_response_is_bound_to_both_commits(
         BASE, EARLIER, frozenset({NEW_PATH, OLD_PATH})
     )
     with pytest.raises(GitHubError, match="different merge candidate"):
-        await service.assess_merge_candidate(IDENTITY.trigger, authority_generation=8)
+        await service.assess_merge_candidate(IDENTITY, authority_generation=8)
 
 
 @pytest.mark.asyncio
@@ -276,7 +292,7 @@ required_labels = ["allow-app"]
         review("second-owner", 2, PULL_HEAD),
     ]
     github.get_pull.return_value["labels"] = [] if label is None else [{"name": label}]
-    result = await service.assess_merge_candidate(IDENTITY.trigger, authority_generation=8)
+    result = await service.assess_merge_candidate(IDENTITY, authority_generation=8)
     assert result.result.conclusion is conclusion
 
 
@@ -287,7 +303,7 @@ async def test_disabled_policy_denies_candidate_even_if_path_evidence_is_unavail
     service, github, _ = assessment_stack
     github.get_regular_file_text.side_effect = None
     github.get_regular_file_text.return_value = None
-    result = await service.assess_merge_candidate(IDENTITY.trigger, authority_generation=8)
+    result = await service.assess_merge_candidate(IDENTITY, authority_generation=8)
     assert result.result.conclusion is EvaluationConclusion.FAILURE
     assert result.result.errors[0].code == "repository_policy_disabled"
     github.get_candidate_changed_paths.assert_not_called()

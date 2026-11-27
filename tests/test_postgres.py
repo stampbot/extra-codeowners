@@ -71,6 +71,7 @@ def test_postgres_merge_group_claim_is_exclusive_and_revoked_across_replicas(
     peer = QueueStore(postgres_url())
     try:
         assert postgres_store.accept_delivery("queued", "merge_group", trigger)
+        assert peer.pending_work_class_snapshot()[("candidate", "event")][0] == 1
         first, second = MergeGroupQueue(postgres_store), MergeGroupQueue(peer)
         if recheck:
             publication = first.claim("original-publication", 60)
@@ -88,8 +89,11 @@ def test_postgres_merge_group_claim_is_exclusive_and_revoked_across_replicas(
                 ),
             )
             assert first.complete(publication, check_id=88, recheck_seconds=5)
+            assert not peer.pending_work_class_snapshot()
             due = utcnow() + timedelta(seconds=6)
             monkeypatch.setattr("extra_codeowners.merge_group_work.utcnow", lambda: due)
+            monkeypatch.setattr("extra_codeowners.database.utcnow", lambda: due)
+            assert peer.pending_work_class_snapshot()[("candidate", "recheck")][0] == 1
         start = threading.Barrier(2)
 
         def claim(queue: MergeGroupQueue, owner: str) -> ClaimedMergeGroup | None:
@@ -119,7 +123,9 @@ def test_postgres_merge_group_claim_is_exclusive_and_revoked_across_replicas(
         revocation = second.claim("revocation", 60)
         assert revocation is not None and revocation.trigger == destroyed
         assert revocation.generation == running.generation + 1
-        assert first.complete(revocation)
+        assert peer.pending_work_class_snapshot()[("candidate", "withdrawal")][0] == 1
+        assert first.complete(revocation, retire=True)
+        assert not peer.pending_work_class_snapshot()
     finally:
         peer.close()
 

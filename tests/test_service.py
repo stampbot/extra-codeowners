@@ -1921,6 +1921,95 @@ async def test_human_team_member_can_approve_non_delegable_path(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enrolled", [True, False])
+async def test_queue_admission_publishes_only_for_the_scoped_test_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enrolled: bool
+) -> None:
+    # Verifies XCO-007: the ordinary head is not the queue admission target.
+    github = FakeGitHub(changed_path="uv.lock")
+    pull = await github.get_pull(2, "example/project", 3)
+    pull.update({"draft": False, "merged": False, "mergeable": True, "merge_commit_sha": None})
+    pull["base"]["repo"]["id"] = 33
+    monkeypatch.setattr(github, "get_pull", AsyncMock(return_value=pull))
+    merge_ref = AsyncMock(return_value="d" * 40)
+    monkeypatch.setattr(github, "get_pull_merge_ref", merge_ref, raising=False)
+    prove = AsyncMock(return_value=True)
+    publish = AsyncMock(return_value=42)
+    monkeypatch.setattr(github, "prove_queue_admission", prove, raising=False)
+    monkeypatch.setattr(github, "write_queue_admission_check", publish, raising=False)
+    config = settings()
+    if enrolled:
+        config = config.model_copy(
+            update={
+                "experimental_merge_queue_repository": "example/project",
+                "experimental_merge_queue_repository_id": 33,
+            }
+        )
+    store = migrated_store(f"sqlite:///{tmp_path / 'queue-admission.db'}")
+    try:
+        service = EvaluationService(config, github, store)  # type: ignore[arg-type]
+        assert await service.evaluate_job(job(store))
+    finally:
+        store.close()
+    assert github.checks[-1]["conclusion"] == "success"
+    if enrolled:
+        merge_ref.assert_awaited_once_with(2, "example/project", 3)
+        assert publish.await_count == prove.await_count == 1
+        assert publish.await_args is not None
+        assert publish.await_args.args[2].test_merge_sha == "d" * 40
+        assert publish.await_args.args[2].pull_head_sha == HEAD
+        assert publish.await_args.kwargs["approved"] is True
+    else:
+        merge_ref.assert_not_awaited()
+        publish.assert_not_awaited()
+        prove.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_permissions_are_shared_only_for_owners_of_changed_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Verifies XCO-005 and XCO-006: both names of the rename need evidence.
+    github = FakeGitHub(changed_path="new.txt", reviewer_type="User")
+    first = (await github.get_reviews(2, "example/project", 3))[0]
+    second = {**first, "id": 6, "user": {"id": 101, "login": "co-reviewer", "type": "User"}}
+    monkeypatch.setattr(github, "get_reviews", AsyncMock(return_value=[first, second]))
+    monkeypatch.setattr(
+        github,
+        "get_pull_files",
+        AsyncMock(
+            return_value=[
+                {"status": "renamed", "filename": "new.txt", "previous_filename": "old.txt"}
+            ]
+        ),
+    )
+    permissions = AsyncMock(return_value=True)
+    memberships = AsyncMock(return_value=True)
+    monkeypatch.setattr(github, "team_can_own_repository", permissions)
+    monkeypatch.setattr(github, "team_member", memberships)
+    irrelevant = "\n".join(f"/docs/{index}.txt @example/docs-{index}" for index in range(150))
+    document = f"/old.txt @example/archive\n/new.txt @example/platform\n{irrelevant}\n"
+    store = migrated_store(f"sqlite:///{tmp_path / 'team-evidence.db'}")
+    try:
+        service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+        monkeypatch.setattr(
+            service, "_find_codeowners", AsyncMock(return_value=("CODEOWNERS", document))
+        )
+        await service.evaluate_job(job(store))
+        assert github.checks[-1]["conclusion"] == "success"
+    finally:
+        store.close()
+
+    assert [call.args[2] for call in permissions.await_args_list] == ["archive", "platform"]
+    assert {(call.args[2], call.args[3]) for call in memberships.await_args_list} == {
+        ("archive", "human-reviewer"),
+        ("archive", "co-reviewer"),
+        ("platform", "human-reviewer"),
+        ("platform", "co-reviewer"),
+    }
+
+
+@pytest.mark.asyncio
 async def test_eligible_pull_request_author_can_satisfy_codeowner_when_opted_in(
     tmp_path: Path,
 ) -> None:
@@ -2777,7 +2866,7 @@ async def test_malformed_opinionated_review_fails_closed() -> None:
             "example/project",
             [{"id": 1, "state": "APPROVED", "user": {"id": 4}}],
             OrganizationPolicy(),
-            parse_codeowners("* @example/platform"),
+            frozenset({"@example/platform"}),
             HEAD,
         )
 
@@ -2793,7 +2882,7 @@ async def test_author_evidence_counts_toward_team_membership_lookup_budget() -> 
             "example/project",
             [],
             OrganizationPolicy(),
-            parse_codeowners("* @example/platform"),
+            frozenset({"@example/platform"}),
             HEAD,
             additional_human_identity_count=MAX_TEAM_MEMBERSHIP_LOOKUPS + 1,
         )
@@ -5507,3 +5596,24 @@ async def test_first_check_uses_current_branch_policy_for_stale_pr_base(tmp_path
     assert github.checks[-1]["status"] == "in_progress"
     github.get_branch_head.assert_awaited_once_with(2, "example/project", "main")
     store.close()
+
+
+def test_changed_file_filenames_must_be_unique() -> None:
+    # Verifies XCO-001 at the shared GitHub file-evidence boundary.
+    files = [
+        {"status": "modified", "filename": "notes.txt"},
+        {"status": "modified", "filename": "notes.txt"},
+    ]
+    with pytest.raises(ValueError, match="repeated a filename"):
+        EvaluationService._changed_files(files)
+
+
+def test_changed_file_filenames_can_reuse_a_rename_source_path() -> None:
+    # Verifies XCO-006: keep both names without confusing a previous path
+    # with a duplicate destination.
+    files = [
+        {"status": "renamed", "filename": "new.txt", "previous_filename": "notes.txt"},
+        {"status": "added", "filename": "notes.txt"},
+    ]
+    first, second = EvaluationService._changed_files(files)
+    assert (first.path, first.previous_path, second.path) == ("new.txt", "notes.txt", "notes.txt")

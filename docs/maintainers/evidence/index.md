@@ -42,6 +42,7 @@ the older results and links newer receipts.
 - [November 23, 2026: an approved candidate merged under both rules](2026-11-23-approved-candidate-merged.md)
 - [November 23, 2026: published images migrated and restored schema 0012](2026-11-23-published-schema-0012-restore.md)
 - [November 23, 2026: restoring native review with a merge queue](2026-11-23-native-review-restored-with-queue.md)
+- [November 27, 2026: queue admission and separate candidate decisions](2026-11-27-queue-admission-and-candidates.md)
 
 ## Add a receipt
 

@@ -163,6 +163,12 @@ and restored the earlier backup with the test delivery intact.
 
 The [November 23 native-review handback](evidence/2026-11-23-native-review-restored-with-queue.md) kept the queue and one ordinary review in place. GitHub first admitted a Dependabot PR with Stampbot's approval. After we restored native review, GitHub refused to queue the same head even though the App check and Stampbot review were unchanged.
 
+The [November 27 admission test](evidence/2026-11-27-queue-admission-and-candidates.md)
+ran the patched App workers against GitHub.com. Two eligible PRs entered
+with passing App checks on their test merges and each merged only after its
+own candidate passed. A PR with an ordinary review but no qualifying
+code-owner approval stayed out of the queue. This was a source-build test.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

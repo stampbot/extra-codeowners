@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Any, Final, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 from urllib.parse import parse_qsl, quote, urlsplit
 
 import httpx
@@ -42,11 +42,14 @@ from extra_codeowners.discovery_cache import CacheEntry, CacheLookupStatus, Disc
 from extra_codeowners.merge_queue import (
     MAX_MERGE_QUEUE_BRANCH_RULES,
     MAX_MERGE_QUEUE_ENTRIES,
+    MERGE_CANDIDATE_CHECK_NAME,
     QUEUE_CANDIDATE_QUERY,
     MergeCandidateIdentity,
     MergeGroupTrigger,
     MergeQueueEvidenceError,
     bind_candidate,
+    candidate_ref_was_replaced,
+    require_serial_queue_rule,
 )
 from extra_codeowners.merge_queue_paths import (
     CandidateChangedPaths,
@@ -54,6 +57,7 @@ from extra_codeowners.merge_queue_paths import (
     changed_paths,
     commit_tree_id,
     immediate_tree_entry,
+    require_commit_parents,
     require_object_id,
 )
 from extra_codeowners.metrics import (
@@ -68,8 +72,12 @@ from extra_codeowners.metrics import (
     GITHUB_RATE_LIMIT_EVENTS,
     GITHUB_RECOVERY_BUDGET_DEFERRALS,
 )
+from extra_codeowners.queue_admission import QueueAdmissionTarget
 from extra_codeowners.request_timing import RequestTiming
 from extra_codeowners.tracing import Tracing
+
+if TYPE_CHECKING:
+    from extra_codeowners.database import QueueStore
 
 MAX_PULL_FILES: Final = 3000
 MAX_PULL_REVIEWS: Final = 1000
@@ -82,6 +90,7 @@ MAX_MERGE_TREE_RESPONSE_BYTES: Final = 8 * 1024 * 1024
 MAX_MERGE_QUEUE_RESPONSE_BYTES: Final = 64 * 1024
 MAX_JSON_RESPONSE_DEPTH: Final = 64
 PENDING_CHECK_EXTERNAL_ID_PREFIX: Final = "extra-codeowners:pending:"
+_SHARED_BACKPRESSURE_RECORDED: Final = "extra_codeowners.shared_backpressure_recorded"
 MAX_CONFIG_BYTES: Final = 1_000_000
 MAX_CODEOWNERS_BYTES: Final = 3 * 1024 * 1024
 # Repository-installation membership is an App-authenticated lookup, so it
@@ -372,6 +381,7 @@ class GitHubRateLimitError(GitHubAPIError):
         retry_after_seconds: int,
         *,
         global_scope: bool = False,
+        backpressure_recorded: bool = False,
     ) -> None:
         super().__init__(status_code, method, path, message)
         self.retry_after_seconds = retry_after_seconds
@@ -379,10 +389,33 @@ class GitHubRateLimitError(GitHubAPIError):
         # installation. A Retry-After/429 response is treated as a shared
         # secondary limit so every pod pauses conservatively.
         self.global_scope = global_scope
+        self.backpressure_recorded = backpressure_recorded
+        self._fallback_backpressure: tuple[QueueStore, int | None] | None = None
+
+    async def persist_backpressure(self, store: QueueStore, installation_id: int | None) -> None:
+        """Record limits not already recorded by the shared REST client."""
+        scope = None if self.global_scope else installation_id
+        if self.backpressure_recorded or self._fallback_backpressure == (store, scope):
+            return
+        await asyncio.to_thread(
+            store.record_provider_backpressure,
+            scope,
+            "GitHub API rate limit",
+            self.retry_after_seconds,
+        )
+        self._fallback_backpressure = (store, scope)
+
+
+class GitHubBackpressureWriteError(GitHubError):
+    """The client observed a provider pause but could not persist it."""
 
 
 class PullRequestTooLargeError(GitHubError):
     """A pull request exceeds a supported API completeness bound."""
+
+
+class MergeCandidateReplacedError(GitHubError):
+    """GitHub proved the candidate ref now contains a different queue entry."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,6 +424,15 @@ class InstallationToken:
 
     value: str
     expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _QueueCheck:
+    installation_id: int
+    repository: str
+    sha: str
+    name: str
+    external_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -814,6 +856,44 @@ class GitHubClient:
             await response.aclose()
             raise
 
+    async def _observe_rest_rate_limit(
+        self,
+        response: httpx.Response,
+        installation_id: int | None,
+        *,
+        app_authenticated: bool,
+    ) -> None:
+        """Persist an observed response even when its caller discards the read."""
+        if self._recovery_budget is None or response.status_code not in {403, 429}:
+            return
+        if installation_id is None and not app_authenticated:
+            return
+        message = self._response_message(response)
+        delay = self._retry_delay(response, message)
+        if delay is None:
+            return
+        global_scope = self._is_global_rate_limit(response, app_authenticated=app_authenticated)
+        GITHUB_RATE_LIMIT_EVENTS.labels("global" if global_scope else "installation").inc()
+        recorded = asyncio.create_task(
+            asyncio.to_thread(
+                self._recovery_budget.store.record_provider_backpressure,
+                None if global_scope else installation_id,
+                "GitHub REST rate limit",
+                delay,
+            )
+        )
+        try:
+            try:
+                await asyncio.shield(recorded)
+            except asyncio.CancelledError:
+                await recorded
+                raise
+        except Exception as error:
+            raise GitHubBackpressureWriteError(
+                "could not persist GitHub REST rate limit"
+            ) from error
+        response.extensions[_SHARED_BACKPRESSURE_RECORDED] = True
+
     def _evict_rejected_token(self, installation_id: int, queue_read: bool, token: str) -> None:
         key = (installation_id, queue_read)
         cached = self._tokens.get(key)
@@ -927,6 +1007,10 @@ class GitHubClient:
                         # quota reservation; there is no response to observe.
                         response = None
                     if response is not None:
+                        # Catch limits before another await can discard the response.
+                        await self._observe_rest_rate_limit(
+                            response, budget_installation, app_authenticated=app_authenticated
+                        )
                         refundable = (
                             conditional_discovery
                             and authentication == "installation"
@@ -1125,6 +1209,14 @@ class GitHubClient:
             response.headers.get("x-ratelimit-reset"),
         )
 
+    @staticmethod
+    def _is_global_rate_limit(response: httpx.Response, *, app_authenticated: bool) -> bool:
+        return (
+            app_authenticated
+            or response.status_code == 429
+            or response.headers.get("retry-after") is not None
+        )
+
     @classmethod
     def _raise_api_error(
         cls,
@@ -1137,12 +1229,10 @@ class GitHubClient:
         message = cls._response_message(response)
         retry_after = cls._retry_delay(response, message)
         if retry_after is not None:
-            global_scope = (
-                app_authenticated
-                or response.status_code == 429
-                or response.headers.get("retry-after") is not None
-            )
-            GITHUB_RATE_LIMIT_EVENTS.labels("global" if global_scope else "installation").inc()
+            global_scope = cls._is_global_rate_limit(response, app_authenticated=app_authenticated)
+            recorded = response.extensions.get(_SHARED_BACKPRESSURE_RECORDED) is True
+            if not recorded:
+                GITHUB_RATE_LIMIT_EVENTS.labels("global" if global_scope else "installation").inc()
             raise GitHubRateLimitError(
                 response.status_code,
                 method,
@@ -1150,6 +1240,7 @@ class GitHubClient:
                 message,
                 retry_after,
                 global_scope=global_scope,
+                backpressure_recorded=recorded,
             )
         raise GitHubAPIError(response.status_code, method, path, message)
 
@@ -1642,16 +1733,18 @@ class GitHubClient:
             require_object_id(target_sha)
             require_object_id(candidate_sha)
 
-            async def tree_for(sha: str) -> str:
+            async def tree_for(sha: str, parents: tuple[str, ...] | None = None) -> str:
                 payload = await self._get_bounded_json(
                     f"/repos/{repository}/git/commits/{sha}",
                     installation_id,
                     max_bytes=MAX_MERGE_COMMIT_RESPONSE_BYTES,
                 )
+                if parents is not None:
+                    require_commit_parents(payload, sha, parents)
                 return commit_tree_id(payload, sha)
 
             before = await tree_for(target_sha)
-            after = await tree_for(candidate_sha)
+            after = await tree_for(candidate_sha, (target_sha,))
             if before == after:
                 return CandidateChangedPaths(target_sha, candidate_sha, frozenset())
 
@@ -1869,17 +1962,9 @@ class GitHubClient:
             trigger.installation_id, trigger.repository, refresh=True
         ):
             raise GitHubError("merge candidate repository is outside the installation")
-        branch = quote(trigger.base_branch, safe="")
-        rules = await self._bounded_json_request(
-            "GET",
-            f"/repos/{trigger.repository}/rules/branches/{branch}",
-            trigger.installation_id,
-            params={"per_page": MAX_MERGE_QUEUE_BRANCH_RULES},
-            max_bytes=MAX_MERGE_QUEUE_RESPONSE_BYTES,
-            queue_read=True,
+        rules = await self._read_queue_branch_rules(
+            trigger.installation_id, trigger.repository, trigger.base_branch
         )
-        if rules.status_code != 200 or rules.has_link:
-            raise GitHubError("GitHub did not return branch rules in one complete response")
         owner, name = trigger.repository.split("/", 1)
         data = await self._graphql(
             trigger.installation_id,
@@ -1900,11 +1985,94 @@ class GitHubClient:
             return bind_candidate(
                 trigger,
                 data.get("repository"),
-                effective_rules=rules.payload,
+                effective_rules=rules,
                 rechecking=rechecking,
             )
         except MergeQueueEvidenceError as error:
+            if candidate_ref_was_replaced(trigger, data.get("repository"), effective_rules=rules):
+                raise MergeCandidateReplacedError("merge queue candidate was replaced") from error
             raise GitHubError(str(error)) from error
+
+    async def _read_queue_branch_rules(
+        self, installation_id: int, repository: str, branch: str
+    ) -> object:
+        branch_path = quote(branch, safe="")
+        rules = await self._bounded_json_request(
+            "GET",
+            f"/repos/{repository}/rules/branches/{branch_path}",
+            installation_id,
+            params={"per_page": MAX_MERGE_QUEUE_BRANCH_RULES},
+            max_bytes=MAX_MERGE_QUEUE_RESPONSE_BYTES,
+            queue_read=True,
+        )
+        if rules.status_code != 200 or rules.has_link:
+            raise GitHubError("GitHub did not return branch rules in one complete response")
+        return rules.payload
+
+    async def get_pull_merge_ref(
+        self, installation_id: int, repository: str, pull_number: int
+    ) -> str:
+        """Resolve the exact synthetic Git ref visible to a read-only App token."""
+        if type(pull_number) is not int or pull_number <= 0:
+            raise ValueError("pull number must be positive")
+        ref = f"pull/{pull_number}/merge"
+        response = await self._get_bounded_json(
+            f"/repos/{repository}/git/ref/{ref}",
+            installation_id,
+            max_bytes=16 * 1024,
+        )
+        if not isinstance(response, dict) or response.get("ref") != f"refs/{ref}":
+            raise GitHubError("GitHub did not return the requested PR test-merge ref")
+        target = response.get("object")
+        if not isinstance(target, dict) or target.get("type") != "commit":
+            raise GitHubError("PR test-merge ref did not identify a commit")
+        try:
+            return require_object_id(target.get("sha"))
+        except MergeTreeEvidenceError as error:
+            raise GitHubError("invalid PR test-merge ref commit ID") from error
+
+    async def prove_queue_admission(
+        self, installation_id: int, repository: str, target: QueueAdmissionTarget
+    ) -> bool:
+        """Confirm the target is a test merge for a branch that requires this App."""
+        rules = await self._read_queue_branch_rules(installation_id, repository, target.base_ref)
+        if not isinstance(rules, list) or len(rules) >= MAX_MERGE_QUEUE_BRANCH_RULES:
+            raise GitHubError("GitHub did not return a complete branch rule list")
+        matching: list[dict[str, Any]] = []
+        for rule in rules:
+            if not isinstance(rule, dict) or not isinstance(rule.get("type"), str):
+                raise GitHubError("GitHub returned an invalid branch rule")
+            if rule["type"] != "required_status_checks":
+                continue
+            parameters = rule.get("parameters")
+            checks = (
+                parameters.get("required_status_checks") if isinstance(parameters, dict) else None
+            )
+            if not isinstance(checks, list) or any(not isinstance(check, dict) for check in checks):
+                raise GitHubError("GitHub returned invalid required check rules")
+            matching.extend(
+                check for check in checks if check.get("context") == MERGE_CANDIDATE_CHECK_NAME
+            )
+        if not matching:
+            return False
+        if any(
+            type(check.get("integration_id")) is not int or check["integration_id"] != self.app_id
+            for check in matching
+        ):
+            raise GitHubError("the queue check is not pinned to this App")
+        try:
+            require_serial_queue_rule(rules)
+            commit = await self._get_bounded_json(
+                f"/repos/{repository}/git/commits/{target.test_merge_sha}",
+                installation_id,
+                max_bytes=MAX_MERGE_COMMIT_RESPONSE_BYTES,
+            )
+            require_commit_parents(
+                commit, target.test_merge_sha, (target.base_sha, target.pull_head_sha)
+            )
+        except (MergeQueueEvidenceError, MergeTreeEvidenceError) as error:
+            raise GitHubError(str(error)) from error
+        return True
 
     @staticmethod
     def _graphql_errors_are_rate_limited(
@@ -2475,8 +2643,21 @@ class GitHubClient:
     def _validate_merge_group_check(
         self, run: object, trigger: MergeGroupTrigger, check_name: str
     ) -> int:
+        return self._validate_queue_check(run, self._candidate_check(trigger, check_name))
+
+    @staticmethod
+    def _candidate_check(trigger: MergeGroupTrigger, check_name: str) -> _QueueCheck:
+        return _QueueCheck(
+            trigger.installation_id,
+            trigger.repository,
+            trigger.head_sha,
+            check_name,
+            trigger.check_external_id,
+        )
+
+    def _validate_queue_check(self, run: object, check: _QueueCheck) -> int:
         if not isinstance(run, dict):
-            raise GitHubError("merge group check evidence is not an object")
+            raise GitHubError("queue check evidence is not an object")
         app, run_id = run.get("app"), run.get("id")
         if (
             not isinstance(app, dict)
@@ -2484,23 +2665,26 @@ class GitHubClient:
             or app["id"] != self.app_id
             or type(run_id) is not int
             or run_id <= 0
-            or run.get("head_sha") != trigger.head_sha
-            or run.get("name") != check_name
-            or run.get("external_id") != trigger.check_external_id
+            or run.get("head_sha") != check.sha
+            or run.get("name") != check.name
+            or run.get("external_id") != check.external_id
         ):
-            raise GitHubError("check run does not identify this App and merge candidate")
+            raise GitHubError("check run does not identify this App and queue evaluation")
         return run_id
 
     async def existing_merge_group_check(
         self, trigger: MergeGroupTrigger, check_name: str
     ) -> int | None:
         """Read only an unambiguous check this App published for this candidate."""
+        return await self._existing_queue_check(self._candidate_check(trigger, check_name))
+
+    async def _existing_queue_check(self, check: _QueueCheck) -> int | None:
         result = await self._request(
             "GET",
-            f"/repos/{trigger.repository}/commits/{trigger.head_sha}/check-runs",
-            installation_id=trigger.installation_id,
+            f"/repos/{check.repository}/commits/{check.sha}/check-runs",
+            installation_id=check.installation_id,
             params={
-                "check_name": check_name,
+                "check_name": check.name,
                 "app_id": self.app_id,
                 "filter": "latest",
                 "per_page": 2,
@@ -2513,8 +2697,8 @@ class GitHubClient:
             or not isinstance(runs, list)
             or count != len(runs)
         ):
-            raise GitHubError("merge group check list is incomplete or ambiguous")
-        return self._validate_merge_group_check(runs[0], trigger, check_name) if runs else None
+            raise GitHubError("queue check list is incomplete or ambiguous")
+        return self._validate_queue_check(runs[0], check) if runs else None
 
     async def write_merge_group_check(
         self,
@@ -2528,31 +2712,73 @@ class GitHubClient:
         """Write an exact candidate result; a destroyed group can only reset a known check."""
         if trigger.action == "destroyed" and (approved or check_id is None):
             raise ValueError("destroyed candidate may only reset an existing check")
-        base = f"/repos/{trigger.repository}/check-runs"
+        return await self._write_queue_check(
+            self._candidate_check(trigger, check_name),
+            check_id=check_id,
+            approved=approved,
+            title="Merge candidate CODEOWNER approvals",
+            summary=summary,
+        )
+
+    async def write_queue_admission_check(
+        self,
+        installation_id: int,
+        repository: str,
+        target: QueueAdmissionTarget,
+        *,
+        approved: bool,
+        summary: str,
+    ) -> int:
+        """Write an admission decision to the previously proven PR test merge."""
+        check = _QueueCheck(
+            installation_id,
+            repository,
+            target.test_merge_sha,
+            MERGE_CANDIDATE_CHECK_NAME,
+            target.external_id,
+        )
+        return await self._write_queue_check(
+            check,
+            check_id=await self._existing_queue_check(check),
+            approved=approved,
+            title="CODEOWNER approvals for merge queue admission",
+            summary=summary,
+        )
+
+    async def _write_queue_check(
+        self,
+        check: _QueueCheck,
+        *,
+        check_id: int | None,
+        approved: bool,
+        title: str,
+        summary: str,
+    ) -> int:
+        base = f"/repos/{check.repository}/check-runs"
         conclusion = "success" if approved else "failure"
         payload: dict[str, Any] = {
-            "name": check_name,
-            "external_id": trigger.check_external_id,
+            "name": check.name,
+            "external_id": check.external_id,
             "status": "completed",
             "conclusion": conclusion,
             "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "output": {"title": "Merge candidate CODEOWNER approvals", "summary": summary[:65535]},
+            "output": {"title": title, "summary": summary[:65535]},
         }
         if check_id is None:
-            payload["head_sha"] = trigger.head_sha
+            payload["head_sha"] = check.sha
         result = await self._request(
             "POST" if check_id is None else "PATCH",
             base if check_id is None else f"{base}/{check_id}",
-            installation_id=trigger.installation_id,
+            installation_id=check.installation_id,
             json=payload,
         )
-        written = self._validate_merge_group_check(result, trigger, check_name)
+        written = self._validate_queue_check(result, check)
         if (
             (check_id is not None and written != check_id)
             or result.get("status") != "completed"
             or result.get("conclusion") != conclusion
         ):
-            raise GitHubError("GitHub did not confirm the requested merge group check")
+            raise GitHubError("GitHub did not confirm the requested queue check")
         return written
 
     async def merge_group_check_is_passing(

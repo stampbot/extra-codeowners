@@ -52,7 +52,7 @@ In production mode, startup rejects:
 Remote PostgreSQL uses `verify-full` unless the operator explicitly sets
 `EXTRA_CODEOWNERS_POSTGRES_TLS_MODE=require`. TLS may be omitted only for
 operator-controlled loopback and Unix-socket connections without `hostaddr`.
-See the [PostgreSQL settings](configuration.md#postgresql-connection-contract)
+See the [PostgreSQL settings](configuration.md#service-settings)
 for accepted routes and CA sources.
 
 Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`, and
@@ -89,7 +89,7 @@ The migration options are:
 On success, the final line names the bundled revision:
 
 ```text
-Database is at migration 0012_merge_candidate_recheck.
+Database is at migration 0013_merge_group_lifecycle.
 ```
 
 Production mode applies the same PostgreSQL and transport checks as `serve`. A
@@ -124,7 +124,7 @@ uv run python -m extra_codeowners database check
 On success, the final line names the compatible revision:
 
 ```text
-Database migration 0012_merge_candidate_recheck is compatible.
+Database migration 0013_merge_group_lifecycle is compatible.
 ```
 
 The command exits nonzero when it cannot connect or when the required release

@@ -116,6 +116,7 @@ async def test_candidate_evidence_reads_both_exact_commits(
         f"{COMMITS_ROUTE}/{CANDIDATE_COMMIT}": {
             "sha": CANDIDATE_COMMIT,
             "tree": {"sha": BASE if matching_roots else CANDIDATE},
+            "parents": [{"sha": TARGET_COMMIT}],
         },
         f"{TREES_ROUTE}/{BASE}": tree(BASE),
         f"{TREES_ROUTE}/{CANDIDATE}": tree(CANDIDATE, *(entry(path, NEW) for path in paths)),

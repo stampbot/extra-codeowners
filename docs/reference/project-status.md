@@ -180,7 +180,10 @@ to GitHub.com repositories that can require a merge queue: organization-owned
 public repositories and private organization repositories on GitHub Enterprise
 Cloud. Candidate checks are opt-in for one repository per deployment. Require
 squash merging, one build slot, one PR per merge, and passing checks on every
-candidate. Other PRs can wait without a built candidate.
+candidate. Other PRs can wait without a built candidate. GitHub needs the
+required App check on the PR test merge for admission and on a separate
+squash candidate for merging. See the [queue runbook][queue-runbook] for how
+to test both stages without weakening production rules.
 
 Keep **Require review from Code Owners** everywhere else. Don't make the
 PR-head check the only code-owner rule. [Issue #4][issue-4] tracks parallel
@@ -221,10 +224,10 @@ The maintainer's deep security review is separate from automated checks.
 A passing prerelease doesn't authorize a production rollout. Use the
 [candidate check and handback procedure](../how-to/test-merge-queue.md)
 with a supported release before switching production rules.
-The earlier queue tests used a shared check name. The new candidate-only
-check still needs a live test that proves GitHub admits an eligible PR and
-requires the candidate result before merging. Keep native review in place
-until both behaviors are verified.
+The [queue admission test](../maintainers/evidence/2026-11-27-queue-admission-and-candidates.md)
+confirmed both stages with the patched source. Repeat the test against the
+published artifact before calling that release verified. Keep production
+native review in place during prerelease tests.
 
 The release gate rejects unreviewed changes to captured third-party records
 on either platform. [Wheel-native catalogs](native-components.md) link the
@@ -301,3 +304,4 @@ on this list opens or closes.
 [issue-302]: https://github.com/stampbot/extra-codeowners/issues/302
 [alpha92-performance]: ../maintainers/evidence/2026-11-12-checkpoint-continuation-and-alpha92.md
 [serial-adr]: ../explanation/adrs/2026-11-25-require-a-serial-merge-queue.md
+[queue-runbook]: ../how-to/test-merge-queue.md

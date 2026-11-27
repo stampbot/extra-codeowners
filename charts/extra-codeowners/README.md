@@ -847,9 +847,10 @@ descriptions.
 | `monitoring.serviceMonitor.interval` | duration | `30s` | Prometheus scrape interval. |
 | `monitoring.serviceMonitor.scrapeTimeout` | duration | `10s` | Per-scrape timeout. |
 | `monitoring.serviceMonitor.sampleLimit` | integer or null | `null` | Optional maximum samples from one scrape. Set it only when the installed ServiceMonitor CRD supports `sampleLimit`; `0` leaves the Prometheus default. |
-| `monitoring.prometheusRule.enabled` | boolean | `false` | Creates interactive-queue and reconciliation-staleness alerts. |
-| `monitoring.prometheusRule.labels` | string map | `severity: warning` | Labels used to select the rule; `severity` is also applied to both alerts. |
+| `monitoring.prometheusRule.enabled` | boolean | `false` | Creates alerts for stalled interactive work, stalled merge candidates, and stale reconciliation. |
+| `monitoring.prometheusRule.labels` | string map | `severity: warning` | Labels used to select the rule. The alerts also use its `severity`. |
 | `monitoring.prometheusRule.interactiveQueueStalledSeconds` | integer | `60` | Alert threshold for the oldest interactive evaluation or invalidation. |
+| `monitoring.prometheusRule.candidateQueueStalledSeconds` | integer | `120` | Alert threshold for the oldest pending candidate event, due recheck, or withdrawal. The threshold must be exceeded for one minute. |
 | `monitoring.prometheusRule.reconciliationStalledSeconds` | integer | `900` | Alert threshold for the last successful reconciliation. |
 | `monitoring.dashboard.enabled` | boolean | `false` | Creates the Grafana dashboard ConfigMap. |
 | `monitoring.dashboard.labels` | string map | `grafana_dashboard: "1"` | Labels expected by the Grafana dashboard sidecar. |

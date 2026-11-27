@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from extra_codeowners.codeowners import CodeownersDocument, CodeownersParseError, parse_codeowners
 from extra_codeowners.models import (
     ActorKind,
+    ChangedFile,
     EvaluationConclusion,
     EvaluationInput,
     EvaluationMessage,
@@ -48,9 +49,9 @@ def latest_opinionated_reviews(
     )
 
 
-def _evaluation_paths(data: EvaluationInput) -> tuple[str, ...]:
+def _evaluation_paths(changed_files: tuple[ChangedFile, ...]) -> tuple[str, ...]:
     paths: list[str] = []
-    for changed_file in data.changed_files:
+    for changed_file in changed_files:
         if changed_file.previous_path is not None:
             paths.append(changed_file.previous_path)
         paths.append(changed_file.path)
@@ -198,8 +199,27 @@ def evaluate(data: EvaluationInput) -> EvaluationResult:
 
 def evaluate_parsed(data: EvaluationInput, document: CodeownersDocument) -> EvaluationResult:
     """Evaluate using the validated document parsed from this exact input."""
+    return evaluate_resolved(data, resolve_path_owners(document, data.changed_files))
+
+
+def resolve_path_owners(
+    document: CodeownersDocument, changed_files: tuple[ChangedFile, ...]
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Resolve effective ownership once, including the previous name of a rename."""
+    return tuple(
+        (path, tuple(sorted(document.owners_for(path))))
+        for path in _evaluation_paths(changed_files)
+    )
+
+
+def evaluate_resolved(
+    data: EvaluationInput, path_owners: tuple[tuple[str, tuple[str, ...]], ...]
+) -> EvaluationResult:
+    """Evaluate with the same effective path owners used to collect evidence."""
     if not data.repository_policy.enabled:
         return _disabled_repository()
+    if tuple(path for path, _ in path_owners) != _evaluation_paths(data.changed_files):
+        raise ValueError("resolved ownership does not cover the evaluated paths")
     try:
         policy = compile_policy(
             data.organization_policy,
@@ -242,8 +262,7 @@ def evaluate_parsed(data: EvaluationInput, document: CodeownersDocument) -> Eval
 
     owner_paths: dict[tuple[str, ...], list[str]] = {}
     unowned_paths: list[str] = []
-    for path in _evaluation_paths(data):
-        owners = tuple(sorted(document.owners_for(path)))
+    for path, owners in path_owners:
         if not owners:
             unowned_paths.append(path)
             continue

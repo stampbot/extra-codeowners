@@ -40,11 +40,17 @@ from extra_codeowners.database import (
     normalize_repository_full_name,
     validate_head_sha,
 )
-from extra_codeowners.evaluator import evaluate, evaluate_parsed, invalid_codeowners_result
+from extra_codeowners.evaluator import (
+    evaluate,
+    evaluate_resolved,
+    invalid_codeowners_result,
+    resolve_path_owners,
+)
 from extra_codeowners.github import (
     MAX_CODEOWNERS_BYTES,
     MAX_PULL_FILES,
     GitHubAPIError,
+    GitHubBackpressureWriteError,
     GitHubClient,
     GitHubError,
     GitHubOperationStoppedError,
@@ -55,11 +61,12 @@ from extra_codeowners.github import (
 from extra_codeowners.merge_group_worker import MergeGroupWorker
 from extra_codeowners.merge_queue import (
     MergeCandidateAssessment,
-    MergeGroupTrigger,
+    MergeCandidateIdentity,
     MergeQueueEvidenceError,
     require_candidate_pull,
     require_reviewed_paths,
 )
+from extra_codeowners.merge_queue_paths import MergeTreeEvidenceError
 from extra_codeowners.metrics import (
     DEAD_JOBS,
     EVALUATION_SECONDS,
@@ -97,6 +104,7 @@ from extra_codeowners.models import (
 )
 from extra_codeowners.ordered_prefetch import ordered_prefetch
 from extra_codeowners.policy import BUILTIN_NON_DELEGABLE_PATHS
+from extra_codeowners.queue_admission import QueueAdmissionTarget, bind_admission_target
 from extra_codeowners.reconciliation_cadence import ReconciliationCadence
 from extra_codeowners.reconciliation_sweep import ReconciliationSweeps
 from extra_codeowners.settings import Settings
@@ -137,6 +145,7 @@ class _CheckPublication:
     base_ref: str
     external_id: str
     details_url: str | None
+    queue_admission: QueueAdmissionTarget | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -602,6 +611,8 @@ class EvaluationService:
         head_sha: str,
         details_url: str | None,
         external_id: str,
+        *,
+        queue_target: QueueAdmissionTarget | None = None,
     ) -> bool:
         """Best-effort reset a completed check without releasing its writer guard.
 
@@ -609,26 +620,36 @@ class EvaluationService:
         from interrupting the GitHub request and exposing a completed result
         before that guard is released.
         """
-        # This compensating write protects an uncertain success. It belongs
-        # to the authority lane even when recovery initiated the evaluation.
-        with request_lane("authority"):
-            reset = asyncio.create_task(
-                self.github.upsert_check_run(
+        summary = (
+            "Completed check publication could not be verified; approval is blocked "
+            "pending re-evaluation."
+        )
+
+        async def block() -> None:
+            if queue_target is not None:
+                await self.github.write_queue_admission_check(
                     job.installation_id,
                     job.repository_full_name,
-                    head_sha,
-                    self.settings.check_name,
-                    status="in_progress",
-                    title="Re-evaluating CODEOWNER approvals",
-                    summary=(
-                        "Completed check publication could not be verified; approval is blocked "
-                        "pending re-evaluation."
-                    ),
-                    details_url=details_url,
-                    external_id=external_id,
-                ),
-                name=f"restore-blocking-check-{job.id}",
+                    queue_target,
+                    approved=False,
+                    summary=summary,
+                )
+                return
+            await self.github.upsert_check_run(
+                job.installation_id,
+                job.repository_full_name,
+                head_sha,
+                self.settings.check_name,
+                status="in_progress",
+                title="Re-evaluating CODEOWNER approvals",
+                summary=summary,
+                details_url=details_url,
+                external_id=external_id,
             )
+
+        # The reset uses the authority lane even when recovery started the evaluation.
+        with request_lane("authority"):
+            reset = asyncio.create_task(block(), name=f"restore-blocking-check-{job.id}")
         cancellation: asyncio.CancelledError | None = None
         while not reset.done():
             try:
@@ -775,60 +796,61 @@ class EvaluationService:
     @staticmethod
     def _changed_files(values: list[dict[str, Any]]) -> tuple[ChangedFile, ...]:
         files: list[ChangedFile] = []
+        destinations: set[str] = set()
         for value in values:
+            path = _required_string(value.get("filename"), "pull file filename")
+            if path in destinations:
+                raise ValueError("pull files response repeated a filename")
+            destinations.add(path)
             status = _required_string(value.get("status"), "pull file status")
             previous = value.get("previous_filename")
             files.append(
                 ChangedFile(
-                    path=_required_string(value.get("filename"), "pull file filename"),
+                    path=path,
                     status=ChangedFileStatus(status),
                     previous_path=previous if isinstance(previous, str) else None,
                 )
             )
         return tuple(files)
 
-    async def _human_team_aliases(
+    async def _verified_team_owners(
         self,
         installation_id: int,
         repository: str,
         repository_owner: str,
-        login: str,
-        document: CodeownersDocument,
+        team_owners: frozenset[str],
     ) -> frozenset[str]:
-        team_owners = {
-            owner
-            for rule in document.rules
-            for owner in rule.owners
-            if "/" in owner
-            and owner.split("/", 1)[0].removeprefix("@").lower() == repository_owner.lower()
-        }
+        """Resolve repository access once per relevant team in this assessment."""
         semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
 
-        async def is_member(owner: str) -> bool:
+        async def eligible(owner: str) -> str | None:
             async with semaphore:
-                team_slug = owner.split("/", 1)[1]
-                member, can_own = await asyncio.gather(
-                    self.github.team_member(
-                        installation_id,
-                        repository_owner,
-                        team_slug,
-                        login,
-                    ),
-                    self.github.team_can_own_repository(
-                        installation_id,
-                        repository_owner,
-                        team_slug,
-                        repository,
-                    ),
+                can_own = await self.github.team_can_own_repository(
+                    installation_id, repository_owner, owner.split("/", 1)[1], repository
                 )
-                return member and can_own
+                return owner if can_own else None
 
-        membership = await asyncio.gather(*(is_member(owner) for owner in sorted(team_owners)))
-        return frozenset(
-            owner
-            for owner, is_member in zip(sorted(team_owners), membership, strict=True)
-            if is_member
-        )
+        owners = await asyncio.gather(*(eligible(owner) for owner in sorted(team_owners)))
+        return frozenset(owner for owner in owners if owner is not None)
+
+    async def _human_team_aliases(
+        self,
+        installation_id: int,
+        repository_owner: str,
+        login: str,
+        verified_teams: frozenset[str],
+    ) -> frozenset[str]:
+        semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
+
+        async def member_of(owner: str) -> str | None:
+            async with semaphore:
+                member = await self.github.team_member(
+                    installation_id, repository_owner, owner.split("/", 1)[1], login
+                )
+                return owner if member else None
+
+        aliases = await asyncio.gather(*(member_of(owner) for owner in sorted(verified_teams)))
+        return frozenset(owner for owner in aliases if owner is not None)
 
     async def _human_owner_evidence(
         self,
@@ -836,7 +858,7 @@ class EvaluationService:
         repository: str,
         repository_owner: str,
         login: str,
-        document: CodeownersDocument,
+        verified_teams: frozenset[str],
     ) -> tuple[bool, frozenset[str]]:
         """Resolve direct and team CODEOWNER evidence for one GitHub user."""
 
@@ -848,10 +870,9 @@ class EvaluationService:
             ),
             self._human_team_aliases(
                 installation_id,
-                repository,
                 repository_owner,
                 login,
-                document,
+                verified_teams,
             ),
         )
 
@@ -917,11 +938,11 @@ class EvaluationService:
         repository: str,
         values: list[dict[str, Any]],
         organization: OrganizationPolicy,
-        document: CodeownersDocument,
+        team_owners: frozenset[str],
         head_sha: str,
         *,
         additional_human_identity_count: int = 0,
-    ) -> tuple[PullRequestReview, ...]:
+    ) -> tuple[tuple[PullRequestReview, ...], frozenset[str]]:
         reviews: list[PullRequestReview] = []
         repository_owner = repository.split("/", 1)[0]
         valid_states = {state.value for state in ReviewState}
@@ -968,24 +989,23 @@ class EvaluationService:
             if value.get("state") == ReviewState.APPROVED.value
             and value.get("commit_id") == head_sha
         ]
-        team_owners = {
-            owner
-            for rule in document.rules
-            for owner in rule.owners
-            if "/" in owner
-            and owner.split("/", 1)[0].removeprefix("@").lower() == repository_owner.lower()
-        }
         human_approvals = sum(
             1
             for value in current
             if isinstance(value.get("user"), dict) and value["user"].get("type") == "User"
         )
-        if (human_approvals + additional_human_identity_count) * len(
-            team_owners
-        ) > MAX_TEAM_MEMBERSHIP_LOOKUPS:
+        human_count = human_approvals + additional_human_identity_count
+        if human_count * len(team_owners) > MAX_TEAM_MEMBERSHIP_LOOKUPS:
             raise EvidenceLimitError(
                 "current human evidence and CODEOWNERS teams exceed the membership lookup budget"
             )
+        verified_teams = (
+            await self._verified_team_owners(
+                installation_id, repository, repository_owner, team_owners
+            )
+            if human_count
+            else frozenset()
+        )
         current_bot_ids = frozenset(
             int(value["user"]["id"])
             for value in current
@@ -1028,7 +1048,7 @@ class EvaluationService:
                     repository,
                     repository_owner,
                     login,
-                    document,
+                    verified_teams,
                 )
                 actor = ReviewActor(
                     kind=ActorKind.HUMAN,
@@ -1046,7 +1066,7 @@ class EvaluationService:
                     submitted_at=datetime.fromisoformat(submitted_at.replace("Z", "+00:00")),
                 )
             )
-        return tuple(reviews)
+        return tuple(reviews), verified_teams
 
     async def _evaluate_current(
         self,
@@ -1131,19 +1151,31 @@ class EvaluationService:
                 )
             )
 
-        files_task = self.github.get_pull_files(
-            job.installation_id, job.repository_full_name, job.pull_number
-        )
-        reviews_task = self.github.get_reviews(
-            job.installation_id, job.repository_full_name, job.pull_number
-        )
-        errors_task = self.github.get_codeowners_errors(
-            job.installation_id, job.repository_full_name, policy_sha
-        )
+        reads = [
+            asyncio.create_task(
+                self.github.get_pull_files(
+                    job.installation_id, job.repository_full_name, job.pull_number
+                )
+            ),
+            asyncio.create_task(
+                self.github.get_reviews(
+                    job.installation_id, job.repository_full_name, job.pull_number
+                )
+            ),
+            asyncio.create_task(
+                self.github.get_codeowners_errors(
+                    job.installation_id, job.repository_full_name, policy_sha
+                )
+            ),
+        ]
         try:
-            file_values, review_values, github_errors = await asyncio.gather(
-                files_task, reviews_task, errors_task
-            )
+            try:
+                file_values, review_values, github_errors = await asyncio.gather(*reads)
+            except BaseException:
+                for read in reads:
+                    read.cancel()
+                await asyncio.gather(*reads, return_exceptions=True)
+                raise
         except PullRequestTooLargeError as error:
             return _Assessment(_failure("evidence_limit_exceeded", str(error)))
         if len(file_values) != expected_changed_files:
@@ -1166,17 +1198,25 @@ class EvaluationService:
             changed_files = self._changed_files(file_values)
             if candidate_paths is not None:
                 require_reviewed_paths(candidate_paths, changed_files)
+            path_owners = resolve_path_owners(document, changed_files)
+            repository_owner = job.repository_full_name.split("/", 1)[0]
+            team_owners = frozenset(
+                owner
+                for _, owners in path_owners
+                for owner in owners
+                if "/" in owner and owner.split("/", 1)[0].lower() == f"@{repository_owner.lower()}"
+            )
             author_identity = (
                 self._pull_request_author_identity(pull)
                 if repository_policy.allow_author_as_codeowner
                 else None
             )
-            reviews = await self._reviews(
+            reviews, verified_teams = await self._reviews(
                 job.installation_id,
                 job.repository_full_name,
                 review_values,
                 organization,
-                document,
+                team_owners,
                 head_sha,
                 additional_human_identity_count=int(author_identity is not None),
             )
@@ -1186,9 +1226,9 @@ class EvaluationService:
                 direct_owner_eligible, aliases = await self._human_owner_evidence(
                     job.installation_id,
                     job.repository_full_name,
-                    job.repository_full_name.split("/", 1)[0],
+                    repository_owner,
                     author_login,
-                    document,
+                    verified_teams,
                 )
                 author = PullRequestAuthor(
                     login=author_login,
@@ -1205,7 +1245,7 @@ class EvaluationService:
         labels = _label_names(pull)
         if parse_failure is not None:
             return _Assessment(parse_failure)
-        result = evaluate_parsed(
+        result = evaluate_resolved(
             EvaluationInput(
                 head_sha=head_sha,
                 codeowners_text=codeowners_text,
@@ -1221,7 +1261,7 @@ class EvaluationService:
                     repository_policy_path=self.settings.policy_path,
                 ),
             ),
-            document,
+            path_owners,
         )
         fingerprint = None
         if result.conclusion is EvaluationConclusion.SUCCESS:
@@ -1241,22 +1281,24 @@ class EvaluationService:
         return _Assessment(result, fingerprint)
 
     async def assess_merge_candidate(
-        self, trigger: MergeGroupTrigger, *, authority_generation: int, rechecking: bool = False
+        self,
+        identity: MergeCandidateIdentity,
+        *,
+        authority_generation: int,
+        rechecking: bool = False,
     ) -> MergeCandidateAssessment:
-        """Evaluate a current queue candidate without changing work, audits or checks.
+        """Evaluate the worker's bound candidate without changing work, audits or checks.
 
         The result is a snapshot, not a publication permit. A worker still needs
         fresh evidence and the durable revocation and authority fences.
         """
+        trigger = identity.trigger
         if self.settings.is_organization_config_repository(trigger.repository):
             raise GitHubError("the organization policy repository uses native enforcement")
         if type(authority_generation) is not int or authority_generation < 0:
             raise ValueError("authority_generation must be a nonnegative integer")
 
         queue_state = {"rechecking": True} if rechecking else {}
-        identity = await self.github.get_merge_candidate(trigger, **queue_state)
-        if identity.trigger != trigger:
-            raise GitHubError("GitHub returned evidence for a different merge candidate")
         scope = _CandidatePolicyScope(
             trigger.installation_id, trigger.repository, identity.pull_number, authority_generation
         )
@@ -1956,11 +1998,92 @@ class EvaluationService:
                 )
                 return False
 
+            queue_admission = await self._queue_admission_target(
+                job, current, base_ref=base_ref, base_sha=policy_sha, head_sha=head_sha
+            )
             return await self._publish_assessment(
                 job,
-                _CheckPublication(head_sha, base_ref, external_id, details_url),
+                _CheckPublication(head_sha, base_ref, external_id, details_url, queue_admission),
                 _Assessment(result, base_fingerprint),
             )
+
+    async def _queue_admission_target(
+        self,
+        job: ClaimedJob,
+        pull: dict[str, Any],
+        *,
+        base_ref: str,
+        base_sha: str,
+        head_sha: str,
+    ) -> QueueAdmissionTarget | None:
+        if job.repository_full_name != self.settings.experimental_merge_queue_repository:
+            return None
+        repository_id = self.settings.experimental_merge_queue_repository_id
+        assert repository_id is not None
+        merge_ref_sha = (
+            await self.github.get_pull_merge_ref(
+                job.installation_id, job.repository_full_name, job.pull_number
+            )
+            if pull.get("mergeable") is True and pull.get("draft") is not True
+            else None
+        )
+        try:
+            target = bind_admission_target(
+                pull,
+                repository=job.repository_full_name,
+                repository_id=repository_id,
+                pull_number=job.pull_number,
+                base_ref=base_ref,
+                base_sha=base_sha,
+                pull_head_sha=head_sha,
+                merge_ref_sha=merge_ref_sha,
+            )
+        except MergeTreeEvidenceError as error:
+            raise GitHubError(str(error)) from error
+        if target is not None and await self.github.prove_queue_admission(
+            job.installation_id, job.repository_full_name, target
+        ):
+            return target
+        return None
+
+    async def _publish_queue_admission(
+        self, job: ClaimedJob, publication: _CheckPublication, result: EvaluationResult
+    ) -> bool:
+        """Publish only the test-merge status under the reviewed head's guard."""
+        target = publication.queue_admission
+        assert target is not None
+        approved = result.conclusion is EvaluationConclusion.SUCCESS
+
+        async def reset() -> None:
+            await self._restore_blocking_after_uncertain_completion(
+                job,
+                publication.head_sha,
+                publication.details_url,
+                publication.external_id,
+                queue_target=target,
+            )
+
+        try:
+            await self.github.write_queue_admission_check(
+                job.installation_id,
+                job.repository_full_name,
+                target,
+                approved=approved,
+                summary=result.summary,
+            )
+            current = await asyncio.to_thread(self.store.is_current_claim, job)
+            publishable = await asyncio.to_thread(
+                self.store.shared_head_generation_is_publishable, job, publication.head_sha
+            )
+        except (Exception, asyncio.CancelledError):
+            if approved:
+                await reset()
+            raise
+        if current and publishable:
+            return True
+        if approved:
+            await reset()
+        return False
 
     async def _publish_assessment(
         self, job: ClaimedJob, publication: _CheckPublication, assessment: _Assessment
@@ -2097,6 +2220,14 @@ class EvaluationService:
                         external_id,
                     )
                     return False
+                if (
+                    publication.queue_admission is not None
+                    and not await self._publish_queue_admission(job, publication, result)
+                ):
+                    await self._restore_blocking_after_uncertain_completion(
+                        job, head_sha, details_url, external_id
+                    )
+                    return False
 
             # If a trigger committed while the completion request was in
             # flight, restore a blocking state ourselves. The shared writer
@@ -2113,6 +2244,17 @@ class EvaluationService:
                         self.store.has_blocking_authority, job, base_ref
                     )
                     if superseded or authority_pending:
+                        if (
+                            publication.queue_admission is not None
+                            and result.conclusion is EvaluationConclusion.SUCCESS
+                        ):
+                            await self._restore_blocking_after_uncertain_completion(
+                                job,
+                                head_sha,
+                                details_url,
+                                external_id,
+                                queue_target=publication.queue_admission,
+                            )
                         await self.github.upsert_check_run(
                             job.installation_id,
                             job.repository_full_name,
@@ -2296,12 +2438,7 @@ class Worker:
             SHARED_HEAD_INVALIDATIONS.labels(outcome).inc()
             return outcome
         except GitHubRateLimitError as error:
-            await asyncio.to_thread(
-                self.store.record_provider_backpressure,
-                None if error.global_scope else job.installation_id,
-                str(error),
-                error.retry_after_seconds,
-            )
+            await error.persist_backpressure(self.store, job.installation_id)
             updated = await asyncio.to_thread(
                 self.store.defer_shared_head_invalidation,
                 job,
@@ -2421,12 +2558,7 @@ class Worker:
             )
             return "budget_deferred"
         except GitHubRateLimitError as error:
-            await asyncio.to_thread(
-                self.store.record_provider_backpressure,
-                None if error.global_scope else job.installation_id,
-                str(error),
-                error.retry_after_seconds,
-            )
+            await error.persist_backpressure(self.store, job.installation_id)
             log.warning(
                 "evaluation_rate_limited",
                 repository=job.repository_full_name,
@@ -2924,12 +3056,7 @@ class Worker:
                     # The job's own retry can use the longest observed delay,
                     # but a shorter App-wide secondary limit must still stop
                     # other installations and pods immediately.
-                    await asyncio.to_thread(
-                        self.store.record_provider_backpressure,
-                        None,
-                        str(global_error),
-                        global_error.retry_after_seconds,
-                    )
+                    await global_error.persist_backpressure(self.store, None)
                 raise max(rate_limits, key=lambda error: error.retry_after_seconds)
             for outcome in outcomes:
                 if isinstance(outcome, BaseException):
@@ -2984,12 +3111,7 @@ class Worker:
             )
             return "budget_deferred"
         except GitHubRateLimitError as error:
-            await asyncio.to_thread(
-                self.store.record_provider_backpressure,
-                None if error.global_scope else job.installation_id,
-                str(error),
-                error.retry_after_seconds,
-            )
+            await error.persist_backpressure(self.store, job.installation_id)
             await asyncio.to_thread(
                 self.store.defer_authority,
                 job,
@@ -3273,6 +3395,9 @@ class Worker:
                     ("invalidation", "interactive"),
                     ("invalidation", "recovery"),
                     ("authority", "authority"),
+                    ("candidate", "event"),
+                    ("candidate", "recheck"),
+                    ("candidate", "withdrawal"),
                 ):
                     count, oldest = snapshot.get((kind, work_class), (0, None))
                     QUEUE_WORK_CLASS_DEPTH.labels(kind, work_class).set(count)
@@ -3408,27 +3533,27 @@ class Reconciler:
             ) as stream:
                 async for pull in stream:
                     yield pull
+        except GitHubBackpressureWriteError as failure:
+            observation_failures.append(failure)
+            stop.set()
+            raise
         except GitHubRateLimitError as error:
             retry_at = self._work_clock() + error.retry_after_seconds
-            observed = asyncio.create_task(
-                asyncio.to_thread(
-                    self.store.record_provider_backpressure,
-                    None if error.global_scope else installation_id,
-                    str(error),
-                    error.retry_after_seconds,
+            if not error.backpressure_recorded:
+                observed = asyncio.create_task(
+                    error.persist_backpressure(self.store, installation_id)
                 )
-            )
-            try:
                 try:
-                    await asyncio.shield(observed)
-                except asyncio.CancelledError:
-                    # An observed limit is not disposable read-ahead.
-                    await observed
+                    try:
+                        await asyncio.shield(observed)
+                    except asyncio.CancelledError:
+                        # An observed limit is not disposable read-ahead.
+                        await observed
+                        raise
+                except Exception as failure:
+                    observation_failures.append(failure)
+                    stop.set()
                     raise
-            except Exception as failure:
-                observation_failures.append(failure)
-                stop.set()
-                raise
             log.info(
                 "reconciliation_provider_backoff_observed",
                 installation_id=installation_id,
@@ -3665,12 +3790,7 @@ class Reconciler:
                 ),
             )
         except GitHubRateLimitError as error:
-            await asyncio.to_thread(
-                self.store.record_provider_backpressure,
-                None,
-                str(error),
-                error.retry_after_seconds,
-            )
+            await error.persist_backpressure(self.store, None)
             log.warning(
                 "reconciliation_rate_limited",
                 scope="global",
@@ -3887,12 +4007,7 @@ class Reconciler:
             except GitHubRateLimitError as error:
                 failed_installations += 1
                 retry_after = error.retry_after_seconds
-                await asyncio.to_thread(
-                    self.store.record_provider_backpressure,
-                    None if error.global_scope else installation_id,
-                    str(error),
-                    error.retry_after_seconds,
-                )
+                await error.persist_backpressure(self.store, installation_id)
                 log.warning(
                     "reconciliation_rate_limited",
                     installation_id=installation_id,

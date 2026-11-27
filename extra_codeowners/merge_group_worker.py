@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import AbstractAsyncContextManager, suppress
 from typing import Protocol
 
@@ -10,7 +11,13 @@ import structlog
 
 from extra_codeowners.api_budget import request_lane
 from extra_codeowners.database import QueueStore
-from extra_codeowners.github import GitHubClient, GitHubError, GitHubRateLimitError
+from extra_codeowners.github import (
+    GitHubAPIError,
+    GitHubClient,
+    GitHubError,
+    GitHubRateLimitError,
+    MergeCandidateReplacedError,
+)
 from extra_codeowners.merge_group_work import (
     ClaimedMergeGroup,
     MergeGroupEvidenceEpoch,
@@ -19,9 +26,11 @@ from extra_codeowners.merge_group_work import (
 from extra_codeowners.merge_queue import (
     MERGE_CANDIDATE_CHECK_NAME,
     MergeCandidateAssessment,
+    MergeCandidateIdentity,
     MergeGroupTrigger,
     candidate_pull_is_closed,
 )
+from extra_codeowners.metrics import WORK_ATTEMPT_SECONDS, WORK_ATTEMPTS
 from extra_codeowners.models import EvaluationConclusion
 from extra_codeowners.settings import Settings
 
@@ -44,7 +53,11 @@ class CandidateEvaluator(Protocol):
         raise NotImplementedError
 
     async def assess_merge_candidate(
-        self, trigger: MergeGroupTrigger, *, authority_generation: int, rechecking: bool = False
+        self,
+        identity: MergeCandidateIdentity,
+        *,
+        authority_generation: int,
+        rechecking: bool = False,
     ) -> MergeCandidateAssessment:
         raise NotImplementedError
 
@@ -125,6 +138,7 @@ class MergeGroupWorker:
                 if keep_check is not None
                 else None
             ),
+            retire=keep_check is None,
         ):
             raise GitHubError("merge candidate lease or generation changed before completion")
 
@@ -139,7 +153,7 @@ class MergeGroupWorker:
         if epoch is None:
             raise GitHubError("merge candidate awaits authority or PR-head invalidation")
         assessment = await self.evaluator.assess_merge_candidate(
-            job.trigger, authority_generation=epoch.installation, **flags
+            identity, authority_generation=epoch.installation, **flags
         )
         if assessment.identity != identity:
             raise GitHubError("merge candidate changed during policy assessment")
@@ -241,17 +255,44 @@ class MergeGroupWorker:
         async with self.evaluator._check_write_guard(trigger.installation_id, trigger.head_sha):
             await self._require_attempt(job)
             await self._require_repository(trigger)
-            existing = await self.github.existing_merge_group_check(trigger, name)
+            if job.pull_identity is not None and await self._bound_pull_is_closed(
+                trigger, job.pull_identity
+            ):
+                await self._complete(job)
+                return
+            try:
+                existing = await self.github.existing_merge_group_check(trigger, name)
+            except GitHubAPIError as error:
+                if error.status_code not in {404, 422} or trigger.action != "checks_requested":
+                    raise
+                # A missing old commit alone can't establish retirement.
+                try:
+                    await self.github.get_merge_candidate(trigger)
+                except MergeCandidateReplacedError:
+                    await self._complete(job)
+                    return
+                raise
             await self._require_attempt(job)
             if existing is not None or trigger.action == "destroyed":
-                if existing is not None and not await self._bound_pull_is_closed(
-                    trigger, job.pull_identity
-                ):
-                    await self._require_attempt(job)
+                if existing is not None:
                     await self._revoke(trigger, existing)
                 await self._complete(job)
                 return
 
+        try:
+            await self._assess_and_publish(job)
+        except MergeCandidateReplacedError:
+            # The provider confirmed another live candidate on this ref. There
+            # is nothing to revoke if the original candidate never got a check.
+            async with self.evaluator._check_write_guard(trigger.installation_id, trigger.head_sha):
+                await self._require_attempt(job)
+                if await self.github.existing_merge_group_check(trigger, name) is not None:
+                    raise
+                await self._complete(job)
+
+    async def _assess_and_publish(self, job: ClaimedMergeGroup) -> None:
+        trigger = job.trigger
+        name = MERGE_CANDIDATE_CHECK_NAME
         assessment, epoch = await self._read_assessment(job)
         identity = assessment.identity
 
@@ -290,22 +331,29 @@ class MergeGroupWorker:
 
     async def _run_attempt(self, job: ClaimedMergeGroup) -> None:
         renew = asyncio.create_task(self._renew(job), name="merge-group-lease")
+        started = time.perf_counter()
+        work_class = "recheck" if job.published else "withdrawal" if job.withdrawal else "event"
+        outcome = "completed"
         try:
             with request_lane("authority"):
                 await self.process(job)
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
         except Exception as error:
+            outcome = "retry"
             delay = min(self.settings.worker_retry_max_seconds, 2 ** min(job.attempts, 10))
             if isinstance(error, GitHubRateLimitError):
+                outcome = "rate_limited"
                 delay = max(delay, error.retry_after_seconds)
-                await asyncio.to_thread(
-                    self.evaluator.store.record_provider_backpressure,
-                    None if error.global_scope else job.trigger.installation_id,
-                    "merge candidate request rate limited",
-                    delay,
-                )
+                await error.persist_backpressure(self.evaluator.store, job.trigger.installation_id)
             await asyncio.to_thread(self.queue.retry, job, delay)
             log.warning("merge_group_attempt_deferred", error_type=type(error).__name__)
         finally:
+            WORK_ATTEMPTS.labels("candidate", work_class, outcome).inc()
+            WORK_ATTEMPT_SECONDS.labels("candidate", work_class, outcome).observe(
+                time.perf_counter() - started
+            )
             renew.cancel()
             with suppress(asyncio.CancelledError):
                 await renew

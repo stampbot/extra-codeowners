@@ -121,6 +121,7 @@ nav:
           - November approved candidate merge: maintainers/evidence/2026-11-23-approved-candidate-merged.md
           - November published schema 0012 restore: maintainers/evidence/2026-11-23-published-schema-0012-restore.md
           - Native review handback: maintainers/evidence/2026-11-23-native-review-restored-with-queue.md
+          - November queue admission and separate candidates: maintainers/evidence/2026-11-27-queue-admission-and-candidates.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md
