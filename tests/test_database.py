@@ -1405,6 +1405,26 @@ def test_reconciliation_states_are_pruned_after_retention(tmp_path: Path) -> Non
     assert store.prune_reconciliation_states(utcnow() - timedelta(days=30)) == 1
 
 
+def test_expired_evaluation_claim_cannot_record_a_confirmation(tmp_path: Path) -> None:
+    # Verifies XCO-016: a worker that lost its lease cannot finish the recheck.
+    store = make_store(tmp_path)
+    queued = JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40)
+    store.enqueue(queued)
+    old = store.claim("old-worker", 60)
+    assert old is not None
+    with store.session() as session:
+        row = session.get(EvaluationJob, old.id)
+        assert row is not None
+        row.lease_until = utcnow() - timedelta(seconds=1)
+
+    assert not store.complete(old, "old-worker")
+    with store.session() as session:
+        assert session.get(ReconciliationState, (17, "example/project", 41)) is None
+    replacement = store.claim("new-worker", 60)
+    assert replacement is not None and replacement.generation > old.generation
+    assert store.complete(replacement, "new-worker")
+
+
 def test_provider_backpressure_is_shared_by_independent_queue_stores(tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'shared-backpressure.db'}"
     upgrade_database(database_url)

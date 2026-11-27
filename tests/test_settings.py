@@ -47,6 +47,11 @@ def test_invalidation_workers_reserve_one_lane_for_recovery() -> None:
         Settings(_env_file=None, worker_invalidation_concurrency=1)
 
 
+def test_pr_check_cannot_use_the_candidate_check_name() -> None:
+    with pytest.raises(ValidationError, match="reserved for the merge candidate"):
+        Settings(_env_file=None, check_name=" extra codeowners / merge candidate ")
+
+
 def test_github_identity_freshness_covers_at_least_two_probe_intervals() -> None:
     with pytest.raises(ValidationError, match="at least twice"):
         Settings(

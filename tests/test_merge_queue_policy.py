@@ -120,7 +120,7 @@ def assessment_stack() -> tuple[EvaluationService, Mock, Mock]:
             ".github/CODEOWNERS": "/owned/ @first-owner\n/history/ @second-owner\n",
         }.get(path)
 
-    github.get_file_text = AsyncMock(side_effect=file_text)
+    github.get_regular_file_text = AsyncMock(side_effect=file_text)
     return EvaluationService(settings, github, store), github, store
 
 
@@ -237,7 +237,7 @@ async def test_current_app_review_still_needs_the_delegation_label(
     # Verifies XCO-003 and XCO-004. Enrollment comes from org policy; its
     # approval and the destination path's repo delegation are both necessary.
     service, github, _ = assessment_stack
-    original: Callable[..., Awaitable[str | None]] = github.get_file_text.side_effect
+    original: Callable[..., Awaitable[str | None]] = github.get_regular_file_text.side_effect
 
     async def file_text(
         installation_id: int,
@@ -269,7 +269,7 @@ required_labels = ["allow-app"]
         return await original(installation_id, repository, path, ref=ref, max_bytes=max_bytes)
 
     bot = {"id": 102, "login": "routine[bot]", "type": "Bot"}
-    github.get_file_text.side_effect = file_text
+    github.get_regular_file_text.side_effect = file_text
     github.get_user = AsyncMock(return_value=bot)
     github.get_reviews.return_value = [
         {**review("first-owner", 1, PULL_HEAD), "user": bot},
@@ -285,8 +285,8 @@ async def test_disabled_policy_denies_candidate_even_if_path_evidence_is_unavail
     assessment_stack: tuple[EvaluationService, Mock, Mock],
 ) -> None:
     service, github, _ = assessment_stack
-    github.get_file_text.side_effect = None
-    github.get_file_text.return_value = None
+    github.get_regular_file_text.side_effect = None
+    github.get_regular_file_text.return_value = None
     result = await service.assess_merge_candidate(IDENTITY.trigger, authority_generation=8)
     assert result.result.conclusion is EvaluationConclusion.FAILURE
     assert result.result.errors[0].code == "repository_policy_disabled"

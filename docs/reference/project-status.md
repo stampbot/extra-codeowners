@@ -221,12 +221,16 @@ The maintainer's deep security review is separate from automated checks.
 A passing prerelease doesn't authorize a production rollout. Use the
 [candidate check and handback procedure](../how-to/test-merge-queue.md)
 with a supported release before switching production rules.
+The earlier queue tests used a shared check name. The new candidate-only
+check still needs a live test that proves GitHub admits an eligible PR and
+requires the candidate result before merging. Keep native review in place
+until both behaviors are verified.
 
 The release gate rejects unreviewed changes to captured third-party records
 on either platform. [Wheel-native catalogs](native-components.md) link the
-reviewed libraries to retained sources. Their separate raw and VEX-applied
-reports still show unresolved findings; a passing image gate isn't a clean
-native assessment.
+reviewed libraries to retained sources. Check the separate raw and VEX-applied
+reports for findings on those copies. A passing image gate doesn't clear
+wheel-native findings.
 
 ### Hardening and verification
 

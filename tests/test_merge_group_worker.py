@@ -21,6 +21,7 @@ from extra_codeowners.github import GitHubClient, GitHubError
 from extra_codeowners.merge_group_work import ClaimedMergeGroup
 from extra_codeowners.merge_group_worker import MergeGroupWorker
 from extra_codeowners.merge_queue import (
+    MERGE_CANDIDATE_CHECK_NAME,
     MergeCandidateAssessment,
     MergeCandidateIdentity,
     MergeGroupTrigger,
@@ -98,9 +99,41 @@ async def test_new_candidate_publishes_only_the_evaluated_group(
     await worker.process(queued(worker, store))
     assess.assert_awaited_once_with(TRIGGER, authority_generation=0)
     client.write_merge_group_check.assert_awaited_once_with(
-        TRIGGER, worker.settings.check_name, approved=approved, summary="candidate decision"
+        TRIGGER, MERGE_CANDIDATE_CHECK_NAME, approved=approved, summary="candidate decision"
     )
+    assert worker.settings.check_name != MERGE_CANDIDATE_CHECK_NAME
     assert worker.queue.claim("restart", 60) is None
+
+
+@pytest.mark.asyncio
+async def test_due_candidate_recheck_gets_a_turn_between_ready_events(
+    stack: tuple[MergeGroupWorker, QueueStore, Mock, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies XCO-007: newer work must not stop the worker rechecking a confirmed pass.
+    worker, store, _, _ = stack
+    approved = queued(worker, store)
+    assert worker.queue.bind(approved, IDENTITY)
+    assert worker.queue.complete(approved, check_id=88, recheck_seconds=1)
+    clock = Mock(return_value=datetime.now(UTC) + timedelta(seconds=2))
+    monkeypatch.setattr("extra_codeowners.merge_group_work.utcnow", clock)
+    cancelled = replace(TRIGGER, action="destroyed", head_sha="d" * 40)
+    waiting = replace(TRIGGER, head_sha="e" * 40)
+    assert store.accept_delivery("other-destroyed", "merge_group", cancelled)
+    assert store.accept_delivery("other-waiting", "merge_group", waiting)
+
+    stop = asyncio.Event()
+    processed = []
+
+    async def record(job: ClaimedMergeGroup) -> None:
+        processed.append(job.trigger)
+        if len(processed) == 3:
+            stop.set()
+
+    monkeypatch.setattr(worker, "_run_attempt", record)
+    await asyncio.wait_for(worker.run(stop), timeout=3)
+
+    assert processed == [cancelled, TRIGGER, waiting]
 
 
 @pytest.mark.asyncio
@@ -172,7 +205,7 @@ async def test_signed_review_dismissal_revokes_a_confirmed_candidate_pass(
 
     initial, withdrawn = github.write_merge_group_check.await_args_list
     assert initial.kwargs["approved"] is True
-    assert withdrawn.args == (TRIGGER, worker.settings.check_name)
+    assert withdrawn.args == (TRIGGER, MERGE_CANDIDATE_CHECK_NAME)
     assert withdrawn.kwargs["check_id"] == 88 and withdrawn.kwargs["approved"] is False
     assess.assert_awaited_once()
     assert worker.queue.claim("observer", 60) is None
@@ -233,7 +266,7 @@ async def test_timer_rechecks_published_candidate_without_a_webhook(
     calls = github.write_merge_group_check.await_args_list
     assert calls[0].kwargs["approved"] is True
     if change in {"review", "unknown", "retry"}:
-        assert len(calls) == 2 and calls[1].args == (TRIGGER, worker.settings.check_name)
+        assert len(calls) == 2 and calls[1].args == (TRIGGER, MERGE_CANDIDATE_CHECK_NAME)
         assert calls[1].kwargs["approved"] is False and calls[1].kwargs["check_id"] == 88
     else:
         assert len(calls) == 1

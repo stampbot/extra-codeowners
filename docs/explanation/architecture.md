@@ -379,6 +379,10 @@ check, just without the blocking step in between. The old result was already
 visible for up to a recheck interval, and this adds the evaluation's own
 duration to that window.
 
+A worker confirms completion only if it reached a decision or a safe skip and
+still owns the lease. If it loses the lease without finishing, the job stays
+available for another worker once the lease expires.
+
 That window has to stay short ([XCO-016](threat-model.md#invariants)). If a
 scheduled recheck fails or loses its
 worker, the job becomes ordinary recovery work: the same transaction advances
@@ -709,6 +713,8 @@ OpenTelemetry traces over OTLP/HTTP. Metrics are the fleet view: they expose
 queue age, worker-attempt duration, GitHub API duration, rate-limit events, and
 reconciliation progress using fixed labels only. They never use a repository,
 pull request, actor, path, SHA, or delivery ID as a label.
+Webhook counters group unknown event and action names under `other`, so new
+names don't create new time series.
 
 Tracing is off by default. When enabled, it creates a root span for a webhook
 acceptance, reconciliation attempt, or leased worker attempt. Worker GitHub API

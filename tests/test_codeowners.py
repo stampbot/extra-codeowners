@@ -37,6 +37,13 @@ def test_last_matching_rule_wins_and_owners_are_normalized() -> None:
         ("docs/**", "docs/guide/index.md", True),
         ("**/generated/*.py", "generated/client.py", True),
         ("**/generated/*.py", "src/generated/client.py", True),
+        ("docs/**/index.md", "docs/index.md", True),
+        ("docs/**/index.md", "docs/a/b/index.md", True),
+        ("docs/***.md", "docs/guides/index.md", False),
+        ("docs/rev**.md", "docs/review.md", True),
+        ("docs/rev**.md", "docs/review/index.md", False),
+        ("docs/rev**/index.md", "docs/review/index.md", True),
+        ("docs/rev**/index.md", "docs/review/notes/index.md", False),
         ("docs/", "docs/index.md", True),
         ("docs/", "docs/guide/index.md", True),
         ("docs/**", "docs/guide/index.md", True),
@@ -66,6 +73,12 @@ def test_parser_reports_all_invalid_lines_and_email_owners() -> None:
         "invalid_pattern",
         "email_owner_unsupported",
     }
+
+
+def test_parser_rejects_a_nonstandard_standalone_recursive_wildcard() -> None:
+    # Verifies XCO-001 rather than guessing how the provider treats triple stars.
+    with pytest.raises(CodeownersParseError, match="recursive wildcard component"):
+        parse_codeowners("docs/***/index.md @example/docs\n")
 
 
 def test_ownerless_rule_validly_clears_earlier_ownership() -> None:

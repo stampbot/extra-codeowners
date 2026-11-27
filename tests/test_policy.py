@@ -142,3 +142,13 @@ def test_invalid_delegation_pattern_fails_closed() -> None:
     with pytest.raises(PolicyCompilationError) as caught:
         compile_policy(organization(), compiled_repo)
     assert caught.value.issues[0].code == "invalid_delegation_pattern"
+
+
+def test_adjacent_stars_do_not_broaden_a_delegation_to_subdirectories() -> None:
+    # Verifies XCO-001 and XCO-005.
+    compiled = compile_policy(organization(), repository(paths=("/docs/rev**.md",)))
+    (delegation,) = compiled.delegations
+    owners = frozenset({"@example/docs"})
+
+    assert delegation.applies_to_path_and_owners("docs/review.md", owners)
+    assert not delegation.applies_to_path_and_owners("docs/review/notes.md", owners)

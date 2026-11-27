@@ -50,7 +50,7 @@ def commit_tree_id(commit: object, expected_commit: str) -> str:
     return require_object_id(tree.get("sha"))
 
 
-def _tree_entries(evidence: object, tree_id: str) -> dict[str, tuple[str, str]]:
+def _read_tree_entries(evidence: object, tree_id: str) -> dict[str, tuple[str, str]]:
     if (
         not isinstance(evidence, dict)
         or evidence.get("sha") != tree_id
@@ -78,7 +78,19 @@ def _tree_entries(evidence: object, tree_id: str) -> dict[str, tuple[str, str]]:
         if row.get("type") != _MODE_TYPES[mode]:
             raise MergeTreeEvidenceError("GitHub tree entry type disagrees with its file mode")
         entries[path] = (mode, require_object_id(row.get("sha")))
+    return entries
 
+
+def immediate_tree_entry(evidence: object, tree_id: str, name: str) -> tuple[str, str] | None:
+    """Look up a single child in a complete, non-recursive Git tree."""
+    entries = _read_tree_entries(evidence, tree_id)
+    if any("/" in path for path in entries):
+        raise MergeTreeEvidenceError("GitHub returned a recursive tree for a direct lookup")
+    return entries.get(name)
+
+
+def _tree_entries(evidence: object, tree_id: str) -> dict[str, tuple[str, str]]:
+    entries = _read_tree_entries(evidence, tree_id)
     # Check the hierarchy even when GitHub explicitly says it didn't truncate.
     # An absent parent can hide a change from the path comparison.
     directories = {path for path, (mode, _) in entries.items() if mode == "040000"}

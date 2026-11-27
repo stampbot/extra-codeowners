@@ -82,6 +82,8 @@ class StubGitHub:
     ) -> str | None:
         return "schema_version = 1\nenabled = false\n"
 
+    get_regular_file_text = get_file_text
+
     async def upsert_check_run(self, *args: Any, **values: Any) -> int:
         if self.fail_next_check:
             self.fail_next_check = False

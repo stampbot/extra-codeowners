@@ -252,6 +252,21 @@ required_labels = ["autoapprove"]
             return "* @example/platform\n"
         return None
 
+    async def get_regular_file_text(
+        self,
+        installation_id: int,
+        repository: str,
+        path: str,
+        *,
+        ref: str | None = None,
+        max_bytes: int = 1_000_000,
+    ) -> str | None:
+        if max_bytes == 1_000_000:
+            return await self.get_file_text(installation_id, repository, path, ref=ref)
+        return await self.get_file_text(
+            installation_id, repository, path, ref=ref, max_bytes=max_bytes
+        )
+
     async def get_pull_files(
         self, installation_id: int, repository: str, number: int
     ) -> list[dict[str, Any]]:
@@ -521,8 +536,9 @@ async def test_evaluation_queue_wait_measures_the_ready_retry_attempt(
     retried_id = retried.id
 
     class Evaluator:
-        async def evaluate_job(self, claimed: ClaimedJob) -> None:
+        async def evaluate_job(self, claimed: ClaimedJob) -> bool:
             assert claimed.id == retried_id
+            return True
 
     histogram = MagicMock()
     monkeypatch.setattr(service_module, "QUEUE_WAIT_SECONDS", histogram)
@@ -556,8 +572,9 @@ async def test_worker_links_the_claimed_webhook_context_without_exporting_privat
     assert claimed.webhook_trace_context == producer
 
     class Evaluator:
-        async def evaluate_job(self, job: ClaimedJob) -> None:
+        async def evaluate_job(self, job: ClaimedJob) -> bool:
             assert job == claimed
+            return True
 
     exporter = InMemorySpanExporter()
     tracing = Tracing(
@@ -2796,9 +2813,10 @@ async def test_worker_completes_a_durable_job(tmp_path: Path) -> None:
     stop = __import__("asyncio").Event()
 
     class Evaluator:
-        async def evaluate_job(self, claimed: ClaimedJob) -> None:
+        async def evaluate_job(self, claimed: ClaimedJob) -> bool:
             assert claimed.pull_number == 3
             stop.set()
+            return True
 
     worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
 
@@ -2821,7 +2839,7 @@ async def test_worker_defers_rate_limit_without_spending_backoff_attempt(tmp_pat
     stop = asyncio.Event()
 
     class Evaluator:
-        async def evaluate_job(self, claimed: ClaimedJob) -> None:
+        async def evaluate_job(self, claimed: ClaimedJob) -> bool:
             stop.set()
             raise GitHubRateLimitError(429, "GET", "/pulls/3", "rate limited", 60)
 
@@ -2876,8 +2894,9 @@ async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
     class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
-        async def evaluate_job(self, claimed: ClaimedJob) -> None:
+        async def evaluate_job(self, claimed: ClaimedJob) -> bool:
             calls.append("evaluation")
+            return True
 
         async def invalidate_for_trigger(self, request: JobRequest, **kwargs: Any) -> bool:
             calls.append(f"revoke-{request.pull_number}")
@@ -2949,10 +2968,11 @@ async def test_worker_does_not_starve_evaluations_behind_authority_retries(
     class Evaluator:
         github = AuthorityGitHub()
 
-        async def evaluate_job(self, claimed: ClaimedJob) -> None:
+        async def evaluate_job(self, claimed: ClaimedJob) -> bool:
             await authority_started.wait()
             calls.append(f"evaluation:{claimed.pull_number}")
             evaluated.set()
+            return True
 
     worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
 
@@ -3832,7 +3852,7 @@ async def test_worker_keeps_deferred_or_failed_evaluation_pending(
     assert claimed is not None
 
     class Evaluator:
-        async def evaluate_job(self, job: ClaimedJob) -> None:
+        async def evaluate_job(self, job: ClaimedJob) -> bool:
             raise error
 
     runtime = settings().model_copy(update={"worker_retry_max_seconds": 5})
@@ -3856,8 +3876,9 @@ async def test_worker_does_not_record_completion_for_a_superseded_generation(
     assert claimed is not None
 
     class Evaluator:
-        async def evaluate_job(self, _job: ClaimedJob) -> None:
+        async def evaluate_job(self, _job: ClaimedJob) -> bool:
             store.enqueue(JobRequest(2, "example/project", 3, "pull_request.synchronize"))
+            return True
 
     completion_metric = MagicMock()
     monkeypatch.setattr(service_module, "WEBHOOK_TO_CHECK_COMPLETION_SECONDS", completion_metric)
@@ -3881,8 +3902,8 @@ async def test_worker_does_not_record_completion_when_durable_acknowledgement_fa
     assert claimed is not None
 
     class Evaluator:
-        async def evaluate_job(self, _job: ClaimedJob) -> None:
-            return None
+        async def evaluate_job(self, _job: ClaimedJob) -> bool:
+            return True
 
     def fail_complete(*args: Any, **kwargs: Any) -> bool:
         del args, kwargs
@@ -4041,7 +4062,7 @@ async def test_worker_budget_deferral_preserves_job_without_provider_backpressur
     assert job is not None
 
     class Evaluator:
-        async def evaluate_job(self, claimed: ClaimedJob) -> None:
+        async def evaluate_job(self, claimed: ClaimedJob) -> bool:
             assert REQUEST_LANE.get() == "recovery"
             raise RecoveryBudgetDeferredError(60)
 

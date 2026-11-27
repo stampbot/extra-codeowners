@@ -95,6 +95,64 @@ def commit_sha(number: int) -> str:
     return f"{number:040x}"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry_kind", ["regular", "missing", "unsupported", "incomplete"])
+async def test_read_approval_policy_requires_regular_git_entries(
+    private_key: str, entry_kind: str
+) -> None:
+    # Verifies XCO-001 and XCO-003 against immutable policy input.
+    revision, root, directory, blob = (commit_sha(number) for number in range(1, 5))
+    entries = (
+        []
+        if entry_kind == "missing"
+        else [
+            {
+                "path": "extra-codeowners.toml",
+                "type": "blob",
+                "mode": "120000" if entry_kind == "unsupported" else "100644",
+                "sha": blob,
+            }
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        if path.endswith(f"/git/commits/{revision}"):
+            return httpx.Response(200, json={"sha": revision, "tree": {"sha": root}})
+        if path.endswith(f"/git/trees/{root}"):
+            tree = [{"path": ".github", "type": "tree", "mode": "040000", "sha": directory}]
+            return httpx.Response(200, json={"sha": root, "truncated": False, "tree": tree})
+        if path.endswith(f"/git/trees/{directory}"):
+            return httpx.Response(
+                200,
+                json={"sha": directory, "truncated": entry_kind == "incomplete", "tree": entries},
+            )
+        if entry_kind == "regular" and path.endswith("/contents/.github/extra-codeowners.toml"):
+            assert request.url.params["ref"] == revision
+            return httpx.Response(200, text="schema_version = 1\n")
+        return unexpected_request(request)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    async def read_policy() -> str | None:
+        return await client.get_regular_file_text(
+            2, "example/project", ".github/extra-codeowners.toml", ref=revision
+        )
+
+    try:
+        if entry_kind in {"unsupported", "incomplete"}:
+            with pytest.raises(GitHubError, match=r"regular files|Git object type"):
+                await read_policy()
+        else:
+            assert await read_policy() == (
+                "schema_version = 1\n" if entry_kind == "regular" else None
+            )
+    finally:
+        await client.close()
+
+
 def dco_pull_snapshot(
     *,
     count: int = 1,

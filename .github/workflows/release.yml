@@ -1282,30 +1282,8 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
+          python3 -I -B tools/published_release_assets.py "${VERSION}" "${PYTHON_VERSION}" stage release
           mapfile -d '' artifacts < <(find release -type f -print0 | sort -z)
-          if (( ${#artifacts[@]} == 0 )); then
-            printf 'No release artifacts were assembled.\n' >&2
-            exit 1
-          fi
-          python - "${artifacts[@]}" <<'PY'
-          import collections
-          import json
-          import sys
-          from pathlib import Path
-
-          artifacts = [Path(argument) for argument in sys.argv[1:]]
-          names = collections.Counter(path.name for path in artifacts)
-          duplicates = sorted(name for name, count in names.items() if count != 1)
-          if duplicates:
-              raise SystemExit(f"release artifacts have duplicate names: {duplicates}")
-          for artifact in artifacts:
-              if not artifact.is_file() or artifact.stat().st_size == 0:
-                  raise SystemExit(f"release artifact is missing or empty: {artifact}")
-              if artifact.name.endswith(".sigstore.json"):
-                  bundle = json.loads(artifact.read_text(encoding="utf-8"))
-                  if not isinstance(bundle, dict):
-                      raise SystemExit(f"Sigstore bundle is not a JSON object: {artifact}")
-          PY
           arguments=(--generate-notes --verify-tag)
           if [[ "${PRERELEASE}" == true ]]; then
             arguments+=(--prerelease)

@@ -17,6 +17,7 @@ from extra_codeowners.merge_group_work import (
     MergeGroupQueue,
 )
 from extra_codeowners.merge_queue import (
+    MERGE_CANDIDATE_CHECK_NAME,
     MergeCandidateAssessment,
     MergeGroupTrigger,
     candidate_pull_is_closed,
@@ -85,7 +86,7 @@ class MergeGroupWorker:
     async def _revoke(self, trigger: MergeGroupTrigger, check_id: int) -> None:
         await self.github.write_merge_group_check(
             trigger,
-            self.settings.check_name,
+            MERGE_CANDIDATE_CHECK_NAME,
             check_id=check_id,
             approved=False,
             summary="This merge candidate is no longer approved. Queue a fresh candidate.",
@@ -95,7 +96,7 @@ class MergeGroupWorker:
         async def reset() -> None:
             await self._require_repository(trigger)
             check_id = await self.github.existing_merge_group_check(
-                trigger, self.settings.check_name
+                trigger, MERGE_CANDIDATE_CHECK_NAME
             )
             if check_id is not None:
                 await self._revoke(trigger, check_id)
@@ -149,7 +150,7 @@ class MergeGroupWorker:
         if published is None:
             raise ValueError("candidate recheck has no confirmed check")
         existing = await self.github.existing_merge_group_check(
-            job.trigger, self.settings.check_name
+            job.trigger, MERGE_CANDIDATE_CHECK_NAME
         )
         if existing != published.check_id:
             raise GitHubError("the current candidate check is not the recorded pass")
@@ -197,7 +198,7 @@ class MergeGroupWorker:
         try:
             await self._require_recorded_check(job)
             if not await self.github.merge_group_check_is_passing(
-                trigger, self.settings.check_name, published.check_id
+                trigger, MERGE_CANDIDATE_CHECK_NAME, published.check_id
             ):
                 await self._complete(job)
                 return
@@ -236,7 +237,7 @@ class MergeGroupWorker:
             await self._process_recheck(job)
             return
         trigger = job.trigger
-        name = self.settings.check_name
+        name = MERGE_CANDIDATE_CHECK_NAME
         async with self.evaluator._check_write_guard(trigger.installation_id, trigger.head_sha):
             await self._require_attempt(job)
             await self._require_repository(trigger)
@@ -311,6 +312,7 @@ class MergeGroupWorker:
 
     async def run(self, stop: asyncio.Event) -> None:
         """Claim one candidate at a time per replica until the service stops."""
+        prefer_recheck = False
         while not stop.is_set():
             try:
                 job = await asyncio.to_thread(
@@ -318,6 +320,7 @@ class MergeGroupWorker:
                     self.owner,
                     self.settings.worker_lease_seconds,
                     repository_scope=self.repository,
+                    recheck=prefer_recheck,
                 )
                 if job is None:
                     job = await asyncio.to_thread(
@@ -325,9 +328,10 @@ class MergeGroupWorker:
                         self.owner,
                         self.settings.worker_lease_seconds,
                         repository_scope=self.repository,
-                        recheck=True,
+                        recheck=not prefer_recheck,
                     )
                 if job is not None:
+                    prefer_recheck = job.published is None
                     await self._run_attempt(job)
                     continue
             except Exception as error:

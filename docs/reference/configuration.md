@@ -113,15 +113,19 @@ Delegation and guardrail patterns follow standard `CODEOWNERS`-compatible matchi
 - A non-terminal `/` also makes a pattern root-relative: `docs/*` addresses the root `docs` directory. A trailing directory pattern such as `apps/` can match an `apps` directory anywhere; write `/apps/` to restrict it to the root.
 - A directory pattern ending in `/`, such as `/docs/`, matches files in that directory and all descendants.
 - A single `*` does not cross `/`; `docs/*` matches direct children but not `docs/guides/start.md`.
-- A double `**` can cross directory boundaries; `docs/**` matches both direct children and nested descendants.
+- A path component of exactly `**` can cross directory boundaries: `docs/**` matches everything under `docs/`. Stars within a name stay in that component, so `docs/rev**.md` won't match anything inside a subdirectory.
+- A component made of three or more stars is rejected. Use `**` for a recursive match.
 - A `?` matches exactly one non-`/` character.
 - Negation with `!` and character ranges with `[]` are not supported by CODEOWNERS and are invalid here.
 
 An ownerless CODEOWNERS rule is valid and clears ownership for its matched path when it is the last matching rule. Extra CODEOWNERS therefore creates no code-owner requirement for that path, although ordinary review counts and other checks still apply.
 
-GitHub supports some CODEOWNERS email identities. Extra CODEOWNERS version 0.1 does not. The evaluator cannot safely resolve an email entry to a review actor, so a relevant email owner fails closed. Supported identities are `@user` and `@organization/team`.
+GitHub supports some CODEOWNERS email identities. Extra CODEOWNERS can't safely resolve one to a review actor, so a relevant email owner fails closed. Supported identities are `@user` and `@organization/team`.
 
 Policy files must be UTF-8 TOML and cannot exceed 1,000,000 bytes. Unknown fields are rejected. Policy should remain small enough for reviewers to inspect the complete authorization boundary. Standard `CODEOWNERS` has a separate 3 MiB maximum. A larger file fails evaluation because GitHub does not use it.
+
+Repository and organization policy, and the `CODEOWNERS` file, must be regular
+files in the Git tree. A symlink or submodule in the path blocks evaluation.
 
 For a rename, Extra CODEOWNERS evaluates both the old and new path. A delegation must cover both names; otherwise the uncovered name requires an appropriate human approval.
 
@@ -322,7 +326,7 @@ does not depend on this probe.
 | --- | --- | --- | --- |
 | `EXTRA_CODEOWNERS_ORG_CONFIG_REPOSITORY` | string | `.github` | Literal repository name used for organization policy: `1`–`100` characters, with no `/` or `\`, and not `.` or `..`. Changing it creates a different trust-policy location and changes which repository is excluded from evaluation. |
 | `EXTRA_CODEOWNERS_POLICY_PATH` | string | `.github/extra-codeowners.toml` | Literal relative POSIX path used for organization and repository policy. Empty, absolute, wildcard, backslash, `.`-segment, and `..`-segment forms are rejected. The effective path is non-delegable by default. A repository may opt only that path into normal App delegation with `allow_delegation_for_policy_file = true`; an organization guardrail still overrides it. Coordinate any change across both policy scopes. |
-| `EXTRA_CODEOWNERS_CHECK_NAME` | string | `Extra CODEOWNERS / approval` | Printable Check Run name after surrounding whitespace is removed; length `1` through `255`. A change must be coordinated with every required-check rule. |
+| `EXTRA_CODEOWNERS_CHECK_NAME` | string | `Extra CODEOWNERS / approval` | Printable PR-head Check Run name after surrounding whitespace is removed; length `1` through `255`. `Extra CODEOWNERS / merge candidate` is reserved for the candidate worker. |
 | `EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_REPOSITORY` | string | unset | One `owner/repository` route per deployment. Set it with the repository ID below; the organization policy repository is excluded. Requires a worker. |
 | `EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_REPOSITORY_ID` | integer | unset | Positive GitHub repository ID for the same route. Both fields must match before ingress accepts candidate work. |
 | `EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_RECHECK_SECONDS` | integer | `30` | Inclusive range `5` through `300`. Delay before rechecking a confirmed candidate pass in the opted-in repository. This is not a revocation deadline. |

@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from extra_codeowners.database import AuthorityRequest, JobRequest, QueueStore
 from extra_codeowners.github import GitHubRateLimitError
 from extra_codeowners.merge_queue import MergeGroupTrigger
-from extra_codeowners.metrics import WEBHOOK_FAILURES, WEBHOOKS
+from extra_codeowners.metrics import WEBHOOK_FAILURES, record_webhook
 from extra_codeowners.service import EvaluationService
 from extra_codeowners.settings import Settings
 from extra_codeowners.tracing import Tracing
@@ -161,7 +161,7 @@ def create_webhook_router(resolve: Callable[[Request], WebhookDependencies]) -> 
                 github_event=webhook.event,
                 action=webhook.action or "received",
             )
-            WEBHOOKS.labels(webhook.event, webhook.action or "received").inc()
+            record_webhook(webhook.event, webhook.action)
             return JSONResponse(
                 {"accepted": True, "queued": False},
                 status_code=status.HTTP_202_ACCEPTED,
@@ -330,7 +330,7 @@ def create_webhook_router(resolve: Callable[[Request], WebhookDependencies]) -> 
                 else {}
             ),
         )
-        WEBHOOKS.labels(webhook.event, webhook.action or "received").inc()
+        record_webhook(webhook.event, webhook.action)
         return JSONResponse(
             {"accepted": accepted, "queued": queued},
             status_code=status.HTTP_202_ACCEPTED,

@@ -395,7 +395,12 @@ def _enqueue_merge_group(session: Session, request: MergeGroupTrigger) -> None:
 
 
 def _requeue_merge_groups(
-    session: Session, installation_id: int, repository: str | None, pull_number: int | None = None
+    session: Session,
+    installation_id: int,
+    repository: str | None,
+    pull_number: int | None = None,
+    *,
+    base_branch: str | None = None,
 ) -> None:
     now = utcnow()
     scope = [
@@ -406,6 +411,8 @@ def _requeue_merge_groups(
         scope.append(MergeGroupWork.repository_full_name == repository)
     if pull_number is not None:
         scope.append(MergeGroupWork.pull_number == pull_number)
+    if base_branch is not None:
+        scope.append(MergeGroupWork.base_ref == f"refs/heads/{base_branch}")
     session.execute(
         update(MergeGroupWork)
         .where(*scope)
@@ -1957,7 +1964,14 @@ class QueueStore:
                             self._enqueue_authority_in_session(session, request)
                             if invalidate_merge_groups:
                                 _requeue_merge_groups(
-                                    session, request.installation_id, request.repository_full_name
+                                    session,
+                                    request.installation_id,
+                                    request.repository_full_name,
+                                    base_branch=(
+                                        request.base_ref
+                                        if request.reason == "push.repository_base"
+                                        else None
+                                    ),
                                 )
                         elif isinstance(request, MergeGroupTrigger):
                             _enqueue_merge_group(session, request)
@@ -3080,36 +3094,22 @@ class QueueStore:
             return updated
 
     def complete(self, job: ClaimedJob, owner: str) -> bool:
-        """Delete only the claimed generation and report whether it completed."""
+        """Acknowledge only the current, unexpired claim."""
         with self.session() as session:
             completed = session.scalar(
-                select(EvaluationJob)
+                delete(EvaluationJob)
                 .where(
                     EvaluationJob.id == job.id,
                     EvaluationJob.generation == job.generation,
+                    EvaluationJob.authority_generation == job.authority_generation,
                     EvaluationJob.lease_owner == owner,
+                    EvaluationJob.lease_until >= utcnow(),
                 )
-                .with_for_update()
+                .returning(EvaluationJob)
             )
-            removed = session.execute(
-                delete(EvaluationJob).where(
-                    EvaluationJob.id == job.id,
-                    EvaluationJob.generation == job.generation,
-                    EvaluationJob.lease_owner == owner,
-                )
-            )
-            if getattr(removed, "rowcount", 0) == 0:
-                session.execute(
-                    update(EvaluationJob)
-                    .where(
-                        EvaluationJob.id == job.id,
-                        EvaluationJob.generation == job.generation,
-                        EvaluationJob.lease_owner == owner,
-                    )
-                    .values(lease_owner=None, lease_until=None)
-                )
+            if completed is None:
                 return False
-            if completed is not None and completed.head_sha_hint is not None:
+            if completed.head_sha_hint is not None:
                 state_key = {
                     "installation_id": completed.installation_id,
                     "repository_full_name": completed.repository_full_name,

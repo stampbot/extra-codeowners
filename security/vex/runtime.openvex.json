@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:0a830ac4-196f-5350-95c5-6fc4c42ee6e6",
+  "@id": "urn:uuid:75ab1764-b532-5610-8156-02fa6dd606f3",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-26T13:56:06Z",
+  "last_updated": "2026-11-27T09:55:18Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1341,11 +1341,101 @@
       "vulnerability": {
         "name": "CVE-2026-95691"
       }
+    },
+    {
+      "impact_statement": "The affected path needs incremental AES-GCM-SIV authenticated data. The Psycopg Binary 3.3.9 copy is used by libpq for stream TLS; neither pinned TLS cipher table offers AES-GCM-SIV. This applies to the default Extra CODEOWNERS service on Linux amd64 and arm64. The library is present and unpatched. Custom providers, operator commands, and arbitrary native callers are outside this review.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Version-bound caller review in security/vex/runtime-review.md and security/vex/native-november-callers.json. OpenSSL advisory: https://openssl-library.org/news/secadv/20261110.txt",
+      "timestamp": "2026-11-27T09:41:54Z",
+      "vulnerability": {
+        "name": "CVE-2026-88823"
+      }
+    },
+    {
+      "impact_statement": "The affected path needs incremental AES-GCM-SIV authenticated data. The default service uses the Cryptography 50.0.2 copy for configured RSA key loading and RS256 signing, not AES-GCM-SIV. This applies to the default Extra CODEOWNERS service on Linux amd64 and arm64. The library is present and unpatched. Custom providers, operator commands, and arbitrary native callers are outside this review.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Version-bound caller review in security/vex/runtime-review.md and security/vex/native-november-callers.json. OpenSSL advisory: https://openssl-library.org/news/secadv/20261110.txt",
+      "timestamp": "2026-11-27T09:41:54Z",
+      "vulnerability": {
+        "name": "CVE-2026-88823"
+      }
+    },
+    {
+      "impact_statement": "The affected path needs the AES-GCM-SIV cipher. The Psycopg Binary 3.3.9 copy is used by libpq for stream TLS, whose cipher table does not offer AES-GCM-SIV. This applies to the default Extra CODEOWNERS service on Linux amd64 and arm64. The library is present and unpatched. Custom providers, operator commands, and arbitrary native callers are outside this review.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Version-bound caller review in security/vex/runtime-review.md and security/vex/native-november-callers.json. OpenSSL advisory: https://openssl-library.org/news/secadv/20261110.txt",
+      "timestamp": "2026-11-27T09:41:54Z",
+      "vulnerability": {
+        "name": "CVE-2026-95692"
+      }
+    },
+    {
+      "impact_statement": "The affected path needs the AES-GCM-SIV cipher. The default service uses the Cryptography 50.0.2 copy for configured RSA key loading and RS256 signing, not AES-GCM-SIV. This applies to the default Extra CODEOWNERS service on Linux amd64 and arm64. The library is present and unpatched. Custom providers, operator commands, and arbitrary native callers are outside this review.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Version-bound caller review in security/vex/runtime-review.md and security/vex/native-november-callers.json. OpenSSL advisory: https://openssl-library.org/news/secadv/20261110.txt",
+      "timestamp": "2026-11-27T09:41:54Z",
+      "vulnerability": {
+        "name": "CVE-2026-95692"
+      }
+    },
+    {
+      "impact_statement": "The defect needs a near-INT_MAX input to OpenSSL's Base64 encoder. The application uses Python Base64 for its small JWTs and doesn't call that encoder. Cryptography's RSA operations use the configured key; webhook and GitHub response bytes do not reach the native encoder. This applies to the default Extra CODEOWNERS service on Linux amd64 and arm64. The library is present and unpatched. Custom providers, operator commands, and arbitrary native callers are outside this review.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Version-bound caller review in security/vex/runtime-review.md and security/vex/native-november-callers.json. OpenSSL advisory: https://www.cve.org/CVERecord?id=CVE-2026-121481",
+      "timestamp": "2026-11-27T09:41:54Z",
+      "vulnerability": {
+        "name": "CVE-2026-121481"
+      }
     }
   ],
-  "timestamp": "2026-11-26T13:56:06Z",
+  "timestamp": "2026-11-27T09:55:18Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 58,
+  "version": 61,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1373,22 +1463,22 @@
       "extra_codeowners/base_evidence.py": "0f1707afceceb8606cf05771b87c23fe7693932991856c35a237063e4e190cd6",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "46d1bfc7b91c68647597f096d1f09d78230057bddc27a9fc6a51d527e5fddd44",
-      "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "7e071e8fa99585e223aa4c69a4a124aa902cc948eba6f04fe7d132f73a9c317c",
+      "extra_codeowners/codeowners.py": "c7946da97e93bced729fffeb44c88319ce46683758631ef822c2b67bda1bef56",
+      "extra_codeowners/database.py": "1a1735d7912f5aabbc29a0b2f90f5fa694b49ac6aed2f15f26968d8ca87d865a",
       "extra_codeowners/database_audit.py": "d93222ffcbccafeaf5a9fca1766cae07c4e2c0d1d4f6e1eaaae74b7756f0707c",
       "extra_codeowners/database_metadata.py": "1ca6342aa8235d1a16f20ed0c358d7a335e94f49b483369d86d866f90844d830",
       "extra_codeowners/database_schema.py": "8e20e3d58085cf7804b1e0ef84e0ba52bb1519f017d50429986aee16419cd130",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "6ab8504381c2f8b627b97d40cd8a709168c11c5f1f32fde7fca8c0be18b04d8c",
       "extra_codeowners/evaluator.py": "3513cfb3415a578cd46dc2c1542cadf4fc698aa808e618712cb6b5ac65cfa0c9",
-      "extra_codeowners/github.py": "e7093d1aa1649b2406cf77238c48c9683b76f47b7a7f5c6127e3bdf4e1b02bcd",
+      "extra_codeowners/github.py": "687992148a751ee37945d8c211239cb18052bcbb75c2372409cf6684ad7fd917",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/merge_group_work.py": "7dbf80fadf5a4aafe7e4f32078fe432511a2582321e5b960da9641c6103a349d",
-      "extra_codeowners/merge_group_worker.py": "304a05c86fafdeb34642d7b4272dae6eca4e568ea93a66f0972a94856c1a90b4",
-      "extra_codeowners/merge_queue.py": "a45169a436bfcf23e63e83f25e31f5371ec79c7dd148a3e3277815c7ae74f813",
-      "extra_codeowners/merge_queue_paths.py": "022a6ca85b9d3d08c4aea250851465212541b85ae58e492509bcec735c181c83",
-      "extra_codeowners/metrics.py": "64785df4eef0b99bacd2cda27ae7a6bae2142a3b246b3b7fb00996631edae9c6",
+      "extra_codeowners/merge_group_worker.py": "069fb6fe90f43d8f9d5e2af1643347f9193f0827beeabb509040c2a969e2f079",
+      "extra_codeowners/merge_queue.py": "034ffa069b044576586d66729e17ceb4be5786b421593f88d26405d67f3c5332",
+      "extra_codeowners/merge_queue_paths.py": "636d6c16df3504aabbd10e32a5389d28bcbba7a4bbd1e22914be86c406a56158",
+      "extra_codeowners/metrics.py": "43f47174e47e6a8cfae2bda503365674d212183582a67161a7f22bd392798a1b",
       "extra_codeowners/migrations.py": "ceb9536b08ae7e37c36adf2d8e505d9e833dc57dc8332e45faf14a44317f3111",
       "extra_codeowners/models.py": "dea5b482c3c6228321b577e8d1916b9e1298d4248add5b0a4544982668ea0b60",
       "extra_codeowners/ordered_prefetch.py": "44c1e7383f94916e6d6c8da13976605440cb771c0b79e1c444c540bf6c14149a",
@@ -1398,11 +1488,11 @@
       "extra_codeowners/reconciliation_sweep.py": "075cedff6f789a39b4171d2a49eb461ccffdf3fb546183fa421af588f0443d9c",
       "extra_codeowners/reconciliation_tracing.py": "0f650bf2300e26d1485fa7df71b71dccbb7739653e049d452d6b30ee9b6b9931",
       "extra_codeowners/request_timing.py": "7c53fcfdec4b8a5b1cf3427c8bd354b76bc6f255ac7374540a6cae0886a48c19",
-      "extra_codeowners/service.py": "32bcb3f6c9df4d3a7b1949b5744711806ba81c65ced42842403d309a988498bb",
-      "extra_codeowners/settings.py": "847810c2a33ea7cebc1b35b0ebbd3f255f30d4ef6a0104acd482ecda2690a085",
+      "extra_codeowners/service.py": "776eb6e1c2c341cfc9b494bd22061c50b4be5860e85600ac11d1be406245e797",
+      "extra_codeowners/settings.py": "ffb610e544bb67dc6e38917bacada0ddec9e500e633843bee278618bdf573e8e",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
-      "extra_codeowners/webhook_ingress.py": "ca7b9e231ca8db06e31a89c9700c38516c33de12b330859e8be14053e82a33c9",
+      "extra_codeowners/webhook_ingress.py": "50c7558aabd762add081c69e44295184819234ceea7c8dd8faf32ef31206684b",
       "extra_codeowners/webhooks.py": "5c7d82babdc7d407c99ca1e0f9ce26ce8d13a6aa5c41cf1f42b8d9b929c4e649",
       "pyproject.toml": "df173084fc06361a680c48a40c2284c56321c107f3148b9cfb1b92d95eb3caeb",
       "security/vex/glibc-format-callers.json": "a06a8c36b621b44f049c11befe07699f805ee518c1d5bf14b03a62a760d4412f",
@@ -1421,7 +1511,7 @@
       "tools/source_recipes/wheel-supplement-protobuf-7.35.1.json": "5b407c288cf74e090f4934113f9bb6f7907a37d6ccbb228321bedb0612b03c8f",
       "uv.lock": "f8a9a125ba46d5275da8300e3f640e5767df2f451f7601a26e4be17c81e3f70e"
     },
-    "review": "Guarded publication and parsed policy reuse retain established database fences and HTTP/TLS transport. No native dependencies or entrypoints changed; existing vulnerability assessments are unchanged.",
+    "review": "Reviewed the locked OpenSSL wheel callers and TLS tables; the approval, unenrolled-policy probe and release changes add no native caller.",
     "schema_version": 1
   }
 }
