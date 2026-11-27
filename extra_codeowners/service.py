@@ -1171,7 +1171,7 @@ class EvaluationService:
         try:
             try:
                 file_values, review_values, github_errors = await asyncio.gather(*reads)
-            except BaseException:
+            except (Exception, asyncio.CancelledError):
                 for read in reads:
                     read.cancel()
                 await asyncio.gather(*reads, return_exceptions=True)

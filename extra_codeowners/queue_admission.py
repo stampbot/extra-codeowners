@@ -38,7 +38,12 @@ def bind_admission_target(
     pull_head_sha: str,
     merge_ref_sha: str | None,
 ) -> QueueAdmissionTarget | None:
-    """Bind a fresh, mergeable PR snapshot to the policy evidence already read."""
+    """Match the PR identity; the caller verifies both test-merge parents.
+
+    GitHub can report a recorded PR base SHA that predates the live branch.
+    The actual test merge must instead name the evaluated base as its first
+    parent, which is checked separately.
+    """
     if pull.get("draft") is True or pull.get("mergeable") is False:
         return None
     base, head = pull.get("base"), pull.get("head")
@@ -52,7 +57,6 @@ def bind_admission_target(
         or pull["number"] != pull_number
         or not isinstance(base, dict)
         or base.get("ref") != base_ref
-        or base.get("sha") != base_sha
         or not isinstance(head, dict)
         or head.get("sha") != pull_head_sha
         or not isinstance(repo, dict)

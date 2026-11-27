@@ -55,6 +55,12 @@ def test_admission_target_is_not_the_reviewed_head() -> None:
         _bind(_pull() | {"merge_commit_sha": TARGET.pull_head_sha})
 
 
+def test_admission_continues_to_parent_proof_with_a_stale_reported_base() -> None:
+    pull = _pull()
+    pull["base"]["sha"] = "f" * 40
+    assert _bind(pull) == TARGET
+
+
 @pytest.mark.parametrize("change", [{"draft": True}, {"mergeable": False}])
 def test_ineligible_pr_has_no_admission_target(change: dict[str, Any]) -> None:
     assert _bind(_pull() | change) is None
@@ -105,6 +111,10 @@ async def test_admission_proof_checks_exact_app_rule_and_ordered_commit_parents(
     monkeypatch.setattr(client, "_get_bounded_json", commit)
     try:
         assert await client.prove_queue_admission(3, REPO, TARGET)
+        commit.return_value["parents"][0]["sha"] = "f" * 40
+        with pytest.raises(GitHubError, match="expected parents"):
+            await client.prove_queue_admission(3, REPO, TARGET)
+        commit.return_value["parents"][0]["sha"] = TARGET.base_sha
         commit.return_value["parents"].reverse()
         with pytest.raises(GitHubError, match="expected parents"):
             await client.prove_queue_admission(3, REPO, TARGET)
