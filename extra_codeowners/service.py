@@ -1773,18 +1773,22 @@ class EvaluationService:
                 head_sha,
                 self.settings.check_name,
             )
-            repository_text: str | None = None
             policy_sha: str | None = None
             if not managed_check:
                 policy_sha = await self.github.get_branch_head(
                     job.installation_id, job.repository_full_name, base_ref
                 )
-                repository_text = await self._repository_policy_text(
-                    job.installation_id,
-                    job.repository_full_name,
-                    policy_sha,
-                )
-                if repository_text is None:
+                # A negative probe only skips an unenrolled head with no check.
+                # Even a positive probe is not policy evidence.
+                if (
+                    await self.github.get_file_text(
+                        job.installation_id,
+                        job.repository_full_name,
+                        self.settings.policy_path,
+                        ref=policy_sha,
+                    )
+                    is None
+                ):
                     return True
             details_url = pull.get("html_url") if isinstance(pull.get("html_url"), str) else None
             external_id = f"{job.repository_full_name}#{job.pull_number}@{head_sha}"
@@ -1858,19 +1862,18 @@ class EvaluationService:
                     "accepted authority change is still awaiting durable fan-out"
                 )
 
-            if managed_check:
+            if policy_sha is None:
                 # Preserving rechecks retain the result while reading policy.
                 # Invalid content publishes failure; unavailable content makes
                 # the failed recheck revoke-first before its retry.
                 policy_sha = await self.github.get_branch_head(
                     job.installation_id, job.repository_full_name, base_ref
                 )
-                repository_text = await self._repository_policy_text(
-                    job.installation_id,
-                    job.repository_full_name,
-                    policy_sha,
-                )
-            assert policy_sha is not None
+            repository_text = await self._repository_policy_text(
+                job.installation_id,
+                job.repository_full_name,
+                policy_sha,
+            )
             expected_changed_files = _required_nonnegative_int(
                 pull.get("changed_files"), "pull_request.changed_files"
             )

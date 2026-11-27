@@ -19,6 +19,7 @@ from packaging.specifiers import SpecifierSet
 import extra_codeowners
 from tools import evaluation_beta_bootstrap as beta_bootstrap
 from tools import readthedocs_bootstrap
+from tools.published_release_assets import expected_assets
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_INSTALLED_BETA_VERSION = "9.8.7.dev1+test"
@@ -1744,8 +1745,10 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     recovery = _workflow_job(release, "verify-existing")
     assert "run: .github/scripts/verify-published-release.sh" in recovery
     verifier = (ROOT / ".github" / "scripts" / "verify-published-release.sh").read_text()
+    assert "tools/published_release_assets.py" in verifier
+    assets = expected_assets("1.0.0-alpha.2", "1.0.0a2")
     for architecture in ("amd64", "arm64"):
-        assert f"cpython-source-{architecture}.tar.gz.sigstore.json" in verifier
+        assert f"cpython-source-{architecture}.tar.gz.sigstore.json" in assets
 
 
 def test_release_retains_one_cached_debian_source_bundle_before_publication() -> None:
@@ -1774,7 +1777,8 @@ def test_release_retains_one_cached_debian_source_bundle_before_publication() ->
         workflow, "verify-existing"
     )
     verifier = (ROOT / ".github" / "scripts" / "verify-published-release.sh").read_text()
-    assert "debian-source.tar.sigstore.json" in verifier
+    assert "tools/published_release_assets.py" in verifier
+    assert "debian-source.tar.sigstore.json" in expected_assets("1.0.0-alpha.2", "1.0.0a2")
 
 
 def test_release_retries_are_idempotent_and_keep_versions_in_one_place() -> None:
