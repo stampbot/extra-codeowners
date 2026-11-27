@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -32,9 +34,10 @@ from extra_codeowners.database import (
     ServiceLease,
     utcnow,
 )
-from extra_codeowners.github import GitHubClient, GitHubRateLimitError
+from extra_codeowners.github import GitHubAPIError, GitHubClient, GitHubRateLimitError
 from extra_codeowners.migrations import upgrade_database
-from extra_codeowners.service import EvaluationService, Reconciler, Worker
+from extra_codeowners.models import OrganizationPolicy, RepositoryPolicy
+from extra_codeowners.service import EvaluationService, Reconciler, Worker, _CandidatePolicyScope
 from extra_codeowners.settings import Settings
 from extra_codeowners.tracing import Tracing
 
@@ -74,6 +77,105 @@ def headers(remaining: int = 99) -> dict[str, str]:
         "x-ratelimit-remaining": str(value.remaining),
         "x-ratelimit-reset": str(int(value.reset_at.timestamp())),
     }
+
+
+@pytest.mark.asyncio
+async def test_parallel_evidence_failure_drains_an_observed_provider_pause(
+    budget_store: QueueStore, private_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Verifies XCO-019: one reader's failed outcome cannot discard a pause
+    # another reader has already observed, even before it exposes that error.
+    record = budget_store.record_provider_backpressure
+    loop = asyncio.get_running_loop()
+    recording = asyncio.Event()
+    checker_started = asyncio.Event()
+    checker_cancelled = asyncio.Event()
+    finish_record = threading.Event()
+
+    def record_then_release(installation_id: int | None, detail: str, delay: int) -> None:
+        loop.call_soon_threadsafe(recording.set)
+        if not finish_record.wait(timeout=8):
+            raise TimeoutError("test did not release provider pause")
+        record(installation_id, detail, delay)
+
+    monkeypatch.setattr(budget_store, "record_provider_backpressure", record_then_release)
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/access_tokens"):
+            return httpx.Response(
+                201,
+                json={
+                    "token": "fictional-token",
+                    "expires_at": (utcnow() + timedelta(hours=1)).isoformat(),
+                },
+            )
+        if path.endswith("/pulls/3/reviews"):
+            return httpx.Response(
+                429, json={"message": "secondary rate limit"}, headers={"retry-after": "30"}
+            )
+        if path.endswith("/pulls/3/files"):
+            await recording.wait()
+            await checker_started.wait()
+            return httpx.Response(500, json={"message": "changed files unavailable"})
+        if path.endswith("/codeowners/errors"):
+            checker_started.set()
+            try:
+                await asyncio.Future()
+            finally:
+                checker_cancelled.set()
+        raise AssertionError(f"unexpected provider request: {path}")
+
+    async def unexpected_peer_request(request: httpx.Request) -> httpx.Response:
+        pytest.fail(f"another replica sent a request during backpressure: {request.url.path}")
+
+    budget = RecoveryApiBudget(budget_store)
+    budget.observe(17, quota())
+    peer = QueueStore(budget_store.engine.url.render_as_string(hide_password=False))
+    client = GitHubClient(
+        7, private_key, recovery_budget=budget, transport=httpx.MockTransport(provider)
+    )
+    second = GitHubClient(
+        7,
+        private_key,
+        recovery_budget=RecoveryApiBudget(peer),
+        transport=httpx.MockTransport(unexpected_peer_request),
+    )
+    service = EvaluationService(Settings(_env_file=None, environment="test"), client, budget_store)
+    monkeypatch.setattr(
+        service, "_load_organization_policy", AsyncMock(return_value=OrganizationPolicy())
+    )
+    monkeypatch.setattr(
+        service, "_find_codeowners", AsyncMock(return_value=("CODEOWNERS", "* @owner"))
+    )
+    result = asyncio.create_task(
+        service._evaluate_current(
+            _CandidatePolicyScope(17, "example/project", 3, 0),
+            {},
+            "b" * 40,
+            "a" * 40,
+            1,
+            RepositoryPolicy(enabled=True),
+        )
+    )
+    try:
+        await asyncio.wait_for(checker_cancelled.wait(), timeout=6)
+        assert not result.done()
+        assert not peer.provider_is_backpressured(None)
+        finish_record.set()
+        with pytest.raises(GitHubAPIError, match="changed files unavailable"):
+            await asyncio.wait_for(result, timeout=5)
+        assert peer.provider_is_backpressured(None)
+        with pytest.raises(ProviderBackpressureActiveError):
+            await second.get_pull_files(17, "example/project", 3)
+    finally:
+        finish_record.set()
+        if not result.done():
+            result.cancel()
+            await asyncio.gather(result, return_exceptions=True)
+        await second.close()
+        await client.close()
+        peer.close()
 
 
 @pytest.mark.parametrize("reason", ["reserve", "exhausted", "probe_pending"])

@@ -24,6 +24,18 @@ spec:
             description: >-
               The oldest interactive evaluation or invalidation has waited for
               more than {{ .Values.monitoring.prometheusRule.interactiveQueueStalledSeconds }} seconds.
+        - alert: ExtraCodeownersCandidateQueueStalled
+          expr: >-
+            max by (namespace) (extra_codeowners_queue_work_class_oldest_age_seconds{kind="candidate"})
+            > {{ .Values.monitoring.prometheusRule.candidateQueueStalledSeconds }}
+          for: 1m
+          labels:
+            severity: {{ default "warning" .Values.monitoring.prometheusRule.labels.severity | quote }}
+          annotations:
+            summary: Extra CODEOWNERS merge-candidate work is waiting too long
+            description: >-
+              A merge-candidate event, recheck, or withdrawal has waited for
+              more than {{ .Values.monitoring.prometheusRule.candidateQueueStalledSeconds }} seconds.
         - alert: ExtraCodeownersReconciliationStalled
           expr: >-
             time() - max by (namespace) (extra_codeowners_reconciliation_last_success_timestamp_seconds)

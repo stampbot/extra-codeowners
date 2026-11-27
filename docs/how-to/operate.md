@@ -24,6 +24,7 @@ pull-request activity.
 | `extra_codeowners_queue_depth` | Returns to the local baseline after webhook bursts |
 | `extra_codeowners_queue_work_class_oldest_age_seconds{kind="evaluation",work_class="interactive"}` | Stays below the direct-event objective; alert before a webhook can wait behind recovery work |
 | `extra_codeowners_queue_work_class_depth{work_class="recovery"}` | Can rise during a burst, but must fall between reconciliation passes |
+| `extra_codeowners_queue_work_class_oldest_age_seconds{kind="candidate"}` | Stays below the queue timeout. A late recheck or withdrawal matters even when the ordinary PR backlog is empty. |
 | `extra_codeowners_shared_head_invalidation_depth` | Returns to `0`; a sustained value means exact-commit revocations are waiting |
 | `extra_codeowners_shared_head_invalidations_total{result="failed"}` | No unexplained increase |
 | `extra_codeowners_dead_jobs` | `0` |
@@ -48,6 +49,12 @@ replicas. Structured `evaluation_started` and `evaluation_completed` logs carry
 the durable job ID, generation, repository, pull number, head, work class, and
 delivery ID when one exists; use those fields to follow one delayed check
 without turning pull requests into Prometheus labels.
+
+If you run the candidate worker, enable the chart's Prometheus rules. Set
+`monitoring.prometheusRule.candidateQueueStalledSeconds` low enough to alert
+before GitHub times out the candidate. The rule waits one more minute before
+firing. If it fires, use `work_class` to tell an unevaluated candidate from
+a late recheck or withdrawal. A recheck that isn't due doesn't count.
 
 ## Trace a slow check
 

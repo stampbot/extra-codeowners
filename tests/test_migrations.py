@@ -89,6 +89,40 @@ def test_candidate_recheck_upgrade_does_not_adopt_an_old_completion(tmp_path: Pa
         store.close()
 
 
+def test_candidate_lifecycle_upgrade_preserves_the_existing_recheck(tmp_path: Path) -> None:
+    url = database_url(tmp_path)
+    upgrade_database(url, revision="0012_merge_candidate_recheck")
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            text("""
+            INSERT INTO merge_group_work
+                (installation_id, repository_id, head_sha, repository_full_name,
+                 base_ref, base_sha, head_ref, destroyed, pull_number, entry_id,
+                 pull_id, pull_head_sha, generation, completed_generation, attempts,
+                 requested_at, available_at, recheck_check_id)
+            VALUES (18, 33, :head, 'example/project', 'refs/heads/main', :base,
+                    'refs/heads/gh-readonly-queue/main/pr-7-fictional', false, 7,
+                    'MQE_example', 'PR_example', :pr_head, 1, 1, 1,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 123)
+        """),
+            {"head": "b" * 40, "base": "a" * 40, "pr_head": "c" * 40},
+        )
+    engine.dispose()
+    upgrade_database(url)
+    store = QueueStore(url)
+    try:
+        store.initialize()
+        assert current_revision(url) == "0013_merge_group_lifecycle"
+        with store.session() as session:
+            row = session.get(database.MergeGroupWork, (18, 33, "b" * 40))
+            assert row is not None and row.recheck_check_id == 123
+            assert row.recheck_due_at is not None and row.recheck_due_at == row.available_at
+            assert row.retired_at is None
+    finally:
+        store.close()
+
+
 def test_all_migration_identifiers_fit_postgresql_alembic_storage() -> None:
     """Keep every revision within Alembic's PostgreSQL VARCHAR(32) default."""
     config = Config()

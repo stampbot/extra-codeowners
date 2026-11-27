@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from extra_codeowners.merge_queue_paths import MergeTreeEvidenceError, require_object_id
@@ -48,7 +48,6 @@ query QueueCandidate(
             state
             isDraft
             baseRefName
-            baseRefOid
             headRefOid
             repository { id }
           }
@@ -195,15 +194,20 @@ class MergeCandidateAssessment:
     result: EvaluationResult
 
 
-def _require_ref(value: object, ref: str, sha: str) -> None:
+def _ref_commit(value: object, ref: str) -> str:
     branch = _record(value)
     target = _record(branch.get("target"))
     if (
         branch.get("prefix") != _HEADS
         or branch.get("name") != ref.removeprefix(_HEADS)
         or target.get("__typename") != "Commit"
-        or target.get("oid") != sha
     ):
+        raise MergeQueueEvidenceError("merge queue ref changed or no longer points to a commit")
+    return _commit_id(target.get("oid"))
+
+
+def _require_ref(value: object, ref: str, sha: str) -> None:
+    if _ref_commit(value, ref) != sha:
         raise MergeQueueEvidenceError("merge queue ref changed or no longer points to a commit")
 
 
@@ -321,7 +325,6 @@ def bind_candidate(
         or pull.get("state") != "OPEN"
         or pull.get("isDraft") is not False
         or pull.get("baseRefName") != trigger.base_branch
-        or pull.get("baseRefOid") != trigger.base_sha
         or head == trigger.head_sha
     ):
         raise MergeQueueEvidenceError("queue entry does not identify the open PR and its revisions")
@@ -356,8 +359,34 @@ def candidate_pull_is_closed(
     return bool(pull["state"] == "closed")
 
 
+def candidate_ref_was_replaced(
+    trigger: MergeGroupTrigger, graph: object, *, effective_rules: object
+) -> bool:
+    """Prove the same queue ref now identifies a different, built candidate."""
+    try:
+        repo = _record(graph)
+        current_head = _ref_commit(repo.get("head"), trigger.head_ref)
+        if current_head == trigger.head_sha:
+            return False
+        current_base = _ref_commit(repo.get("base"), trigger.base_ref)
+        bind_candidate(
+            replace(trigger, head_sha=current_head, base_sha=current_base),
+            graph,
+            effective_rules=effective_rules,
+            rechecking=True,
+        )
+    except MergeQueueEvidenceError:
+        # Missing, unreadable, or contradictory state cannot retire a candidate.
+        return False
+    return True
+
+
 def require_candidate_pull(identity: MergeCandidateIdentity, value: object) -> None:
-    """Check that the REST policy input still describes the GraphQL queue entry."""
+    """Check that the REST PR still describes the GraphQL queue entry.
+
+    The PR's recorded base can lag after a preceding entry merges. The live
+    branch and queue entry, checked separately, identify the candidate's base.
+    """
     pull = _record(value)
     base, head = _record(pull.get("base")), _record(pull.get("head"))
     repo = _record(base.get("repo"))
@@ -372,7 +401,6 @@ def require_candidate_pull(identity: MergeCandidateIdentity, value: object) -> N
         or repo.get("node_id") != identity.repository_node_id
         or _repository_name(repo.get("full_name")).lower() != trigger.repository
         or base.get("ref") != trigger.base_branch
-        or base.get("sha") != trigger.base_sha
         or head.get("sha") != identity.pull_head_sha
     ):
         raise MergeQueueEvidenceError("pull evidence does not match the current queue entry")

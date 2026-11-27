@@ -178,6 +178,7 @@ monitoring:
     labels:
       severity: warning
     interactiveQueueStalledSeconds: 60
+    candidateQueueStalledSeconds: 120
     reconciliationStalledSeconds: 900
   dashboard:
     enabled: false

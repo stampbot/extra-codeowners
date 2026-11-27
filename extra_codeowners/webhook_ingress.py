@@ -277,12 +277,7 @@ def create_webhook_router(resolve: Callable[[Request], WebhookDependencies]) -> 
                     )
                 except GitHubRateLimitError as error:
                     try:
-                        await asyncio.to_thread(
-                            queue_store.record_provider_backpressure,
-                            None if error.global_scope else job.installation_id,
-                            str(error),
-                            error.retry_after_seconds,
-                        )
+                        await error.persist_backpressure(queue_store, job.installation_id)
                     except Exception as record_error:
                         log.warning(
                             "webhook_provider_backpressure_record_failed",

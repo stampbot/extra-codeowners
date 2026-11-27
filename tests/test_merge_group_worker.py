@@ -17,7 +17,12 @@ from fastapi.testclient import TestClient
 
 from extra_codeowners.app import create_app
 from extra_codeowners.database import AuthorityRequest, JobRequest, QueueStore
-from extra_codeowners.github import GitHubClient, GitHubError
+from extra_codeowners.github import (
+    GitHubAPIError,
+    GitHubClient,
+    GitHubError,
+    MergeCandidateReplacedError,
+)
 from extra_codeowners.merge_group_work import ClaimedMergeGroup
 from extra_codeowners.merge_group_worker import MergeGroupWorker
 from extra_codeowners.merge_queue import (
@@ -97,12 +102,47 @@ async def test_new_candidate_publishes_only_the_evaluated_group(
         IDENTITY, EvaluationResult(conclusion=decision, summary="candidate decision")
     )
     await worker.process(queued(worker, store))
-    assess.assert_awaited_once_with(TRIGGER, authority_generation=0)
+    assess.assert_awaited_once_with(IDENTITY, authority_generation=0)
+    assert client.get_merge_candidate.await_count == 2
     client.write_merge_group_check.assert_awaited_once_with(
         TRIGGER, MERGE_CANDIDATE_CHECK_NAME, approved=approved, summary="candidate decision"
     )
     assert worker.settings.check_name != MERGE_CANDIDATE_CHECK_NAME
     assert worker.queue.claim("restart", 60) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("check_lookup_available", [True, False])
+async def test_replaced_unpublished_candidate_retires_without_writing(
+    stack: tuple[MergeGroupWorker, QueueStore, Mock, AsyncMock],
+    check_lookup_available: bool,
+) -> None:
+    worker, store, client, assess = stack
+    client.get_merge_candidate.side_effect = MergeCandidateReplacedError("candidate was replaced")
+    if not check_lookup_available:
+        client.existing_merge_group_check.side_effect = GitHubAPIError(
+            422, "GET", "/checks", "old test commit no longer available"
+        )
+    await worker.process(queued(worker, store))
+    assess.assert_not_awaited()
+    client.write_merge_group_check.assert_not_awaited()
+    assert store.accept_delivery("delayed", "merge_group", TRIGGER)
+    assert worker.queue.claim("restart", 60) is None
+
+
+@pytest.mark.asyncio
+async def test_missing_check_lookup_is_not_by_itself_retirement_evidence(
+    stack: tuple[MergeGroupWorker, QueueStore, Mock, AsyncMock],
+) -> None:
+    worker, store, client, _ = stack
+    client.existing_merge_group_check.side_effect = GitHubAPIError(
+        422, "GET", "/checks", "old test commit no longer available"
+    )
+    job = queued(worker, store)
+    with pytest.raises(GitHubAPIError, match="no longer available"):
+        await worker.process(job)
+    assert worker.queue.is_current(job)
+    client.write_merge_group_check.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -272,6 +312,8 @@ async def test_timer_rechecks_published_candidate_without_a_webhook(
         assert len(calls) == 1
     if change in {"none", "review"}:
         assert assess.await_args is not None and assess.await_args.kwargs["rechecking"] is True
+    if change == "none":
+        assert github.get_merge_candidate.await_count == 4
     if change == "retry":
         assess.assert_awaited_once()
     clock.return_value += timedelta(seconds=31)

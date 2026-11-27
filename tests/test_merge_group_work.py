@@ -135,6 +135,62 @@ def test_lease_takeover_with_same_owner_cannot_reuse_expired_attempt(
     assert second.complete(new)
 
 
+def test_retired_candidate_is_not_revived_after_a_missed_destroy_delivery(
+    replica_pair: tuple[QueueStore, QueueStore],
+) -> None:
+    # Verifies XCO-001. Only a new candidate may enter assessment.
+    ingress, worker = replica_pair
+    queue = candidate_work.MergeGroupQueue(worker)
+    assert ingress.accept_delivery("queued", "merge_group", TRIGGER)
+    first = queue.claim("initial", 60)
+    assert first is not None and queue.bind(first, IDENTITY)
+    assert queue.complete(first, retire=True)
+    assert ingress.accept_delivery(
+        "later-authority",
+        "repository",
+        AuthorityRequest(TRIGGER.installation_id, TRIGGER.repository, None, "repository.edited"),
+        invalidate_merge_groups=True,
+    )
+    assert ingress.accept_delivery("delayed", "merge_group", TRIGGER)
+    assert queue.claim("no-resurrection", 60) is None
+    assert queue.claim("no-resurrection", 60, recheck=True) is None
+
+
+def test_candidate_backlog_keeps_overdue_rechecks_visible_during_a_retry(
+    replica_pair: tuple[QueueStore, QueueStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ingress, worker = replica_pair
+    assert ingress.accept_delivery("queued", "merge_group", TRIGGER)
+    now = utcnow() + timedelta(seconds=1)
+    clock = Mock(return_value=now)
+    monkeypatch.setattr(candidate_work, "utcnow", clock)
+    monkeypatch.setattr("extra_codeowners.database.utcnow", clock)
+    queue = candidate_work.MergeGroupQueue(worker)
+    assert worker.pending_count() == 1
+    assert worker.pending_work_class_snapshot()[("candidate", "event")][0] == 1
+    first = queue.claim("run", 60)
+    assert first is not None and queue.bind(first, IDENTITY)
+    assert queue.complete(first, check_id=88, recheck_seconds=30)
+    assert worker.pending_work_class_snapshot() == {}
+    assert worker.pending_count() == 0
+
+    due = now + timedelta(seconds=30)
+    clock.return_value = due
+    recheck = queue.claim("timer", 60, recheck=True)
+    assert recheck is not None
+    assert queue.retry(recheck, 90)
+    assert worker.pending_count() == 1
+    assert worker.pending_work_class_snapshot() == {("candidate", "recheck"): (1, due)}
+
+    assert ingress.accept_delivery("withdraw", "merge_group", replace(TRIGGER, action="destroyed"))
+    assert worker.pending_work_class_snapshot() == {("candidate", "withdrawal"): (1, due)}
+    withdrawal = queue.claim("withdraw", 60)
+    assert withdrawal is not None and withdrawal.withdrawal
+    assert queue.complete(withdrawal, retire=True)
+    assert worker.pending_count() == 0
+    assert worker.pending_work_class_snapshot() == {}
+
+
 def test_retry_waits_without_starving_a_cancellation(
     replica_pair: tuple[QueueStore, QueueStore], monkeypatch: pytest.MonkeyPatch
 ) -> None:

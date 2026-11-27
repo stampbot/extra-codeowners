@@ -16,10 +16,10 @@ If a branch requires candidate checks, follow the
 [native-review handback](test-merge-queue.md#return-to-native-review) before
 taking the App offline.
 
-If you tested a release that used the same name for PR and candidate checks,
-hand enforcement back to native review and drain the queue before upgrading.
-Remove the old required App check. Then test the new candidate check in a
-disposable repository before changing any production rules.
+If you tested an older queue prerelease, hand enforcement back to native
+review and drain the queue before upgrading. Remove its required App check.
+Then verify admission and candidate evaluation with the new release in a
+disposable repository. Leave production native review on when testing alphas.
 
 ## Before you begin
 

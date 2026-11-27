@@ -50,6 +50,24 @@ def commit_tree_id(commit: object, expected_commit: str) -> str:
     return require_object_id(tree.get("sha"))
 
 
+def require_commit_parents(
+    commit: object, expected_commit: str, expected_parents: tuple[str, ...]
+) -> None:
+    """Bind a GitHub Git commit to its expected, ordered parent list."""
+    if not isinstance(commit, dict) or commit.get("sha") != expected_commit:
+        raise MergeTreeEvidenceError("GitHub returned a different commit")
+    parents = commit.get("parents")
+    if (
+        not isinstance(parents, list)
+        or len(parents) != len(expected_parents)
+        or any(
+            not isinstance(parent, dict) or parent.get("sha") != expected
+            for parent, expected in zip(parents, expected_parents, strict=True)
+        )
+    ):
+        raise MergeTreeEvidenceError("GitHub commit does not have the expected parents")
+
+
 def _read_tree_entries(evidence: object, tree_id: str) -> dict[str, tuple[str, str]]:
     if (
         not isinstance(evidence, dict)

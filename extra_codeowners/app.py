@@ -185,12 +185,7 @@ class GitHubIdentityProbe:
             await self._github.verify_app_identity(stop=stop)
         except GitHubRateLimitError as error:
             try:
-                await asyncio.to_thread(
-                    self._store.record_provider_backpressure,
-                    None,
-                    str(error),
-                    error.retry_after_seconds,
-                )
+                await error.persist_backpressure(self._store, None)
             except Exception as record_error:
                 log.warning(
                     "github_app_identity_probe_backpressure_record_failed",

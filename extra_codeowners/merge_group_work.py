@@ -38,6 +38,7 @@ class ClaimedMergeGroup:
     lease_owner: str
     published: PublishedMergeCandidate | None = None
     pull_identity: tuple[str, int] | None = None
+    withdrawal: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +72,7 @@ def _owns(job: ClaimedMergeGroup, now: datetime) -> tuple[ColumnElement[bool], .
         MergeGroupWork.attempts == job.attempts,
         MergeGroupWork.lease_owner == job.lease_owner,
         MergeGroupWork.lease_until > now,
+        MergeGroupWork.retired_at.is_(None),
     )
     if job.published is None:
         return (*claim, _pending())
@@ -108,6 +110,7 @@ class MergeGroupQueue:
             with self.store.session() as session:
                 ready: tuple[ColumnElement[bool], ...] = (
                     MergeGroupWork.available_at <= now,
+                    MergeGroupWork.retired_at.is_(None),
                     _unleased(now),
                     self.store._provider_available_condition(MergeGroupWork.installation_id, now),
                 )
@@ -175,7 +178,14 @@ class MergeGroupQueue:
                 )
                 if getattr(result, "rowcount", 0) == 1:
                     return ClaimedMergeGroup(
-                        trigger, row.generation, row.attempts + 1, owner, published, pull_identity
+                        trigger,
+                        row.generation,
+                        row.attempts + 1,
+                        owner,
+                        published,
+                        pull_identity,
+                        withdrawal=not recheck
+                        and (row.destroyed or row.recheck_check_id is not None),
                     )
         return None
 
@@ -284,14 +294,16 @@ class MergeGroupQueue:
         *,
         check_id: int | None = None,
         recheck_seconds: int | None = None,
+        retire: bool = False,
     ) -> bool:
         """Finish an attempt, scheduling only a confirmed pass for another read."""
         now = utcnow()
         finished_generation = job.generation
-        schedule: dict[str, object] = {"recheck_check_id": None}
+        schedule: dict[str, object] = {"recheck_check_id": None, "recheck_due_at": None}
         if check_id is not None or recheck_seconds is not None:
             if (
-                type(check_id) is not int
+                retire
+                or type(check_id) is not int
                 or check_id <= 0
                 or type(recheck_seconds) is not int
                 or recheck_seconds <= 0
@@ -299,9 +311,11 @@ class MergeGroupQueue:
                 or job.trigger.action != "checks_requested"
             ):
                 raise ValueError("a candidate recheck needs its confirmed check and delay")
+            due = now + timedelta(seconds=recheck_seconds)
             schedule = {
                 "recheck_check_id": check_id,
-                "available_at": now + timedelta(seconds=recheck_seconds),
+                "recheck_due_at": due,
+                "available_at": due,
                 "attempts": 0,
             }
             if job.published is not None:
@@ -309,6 +323,8 @@ class MergeGroupQueue:
                 # same owner must not let a finished timer borrow a later lease.
                 finished_generation += 1
                 schedule["generation"] = finished_generation
+        if retire:
+            schedule["retired_at"] = now
         return self._update(
             job,
             now,

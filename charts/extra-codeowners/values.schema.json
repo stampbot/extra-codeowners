@@ -521,6 +521,7 @@
             "enabled",
             "labels",
             "interactiveQueueStalledSeconds",
+            "candidateQueueStalledSeconds",
             "reconciliationStalledSeconds"
           ],
           "properties": {
@@ -531,6 +532,11 @@
               "$ref": "#/definitions/stringMap"
             },
             "interactiveQueueStalledSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400
+            },
+            "candidateQueueStalledSeconds": {
               "type": "integer",
               "minimum": 1,
               "maximum": 86400

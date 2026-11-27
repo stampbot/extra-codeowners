@@ -1,9 +1,9 @@
 # Configure a one-at-a-time merge queue
 
 Use a required merge queue when Extra CODEOWNERS replaces native code-owner
-review. Several PRs can wait in the queue. GitHub builds one candidate at a
-time, and the App evaluates the PR at the front against that candidate.
-The next PR needs its own result.
+review. GitHub checks the PR before admitting it, then checks a new commit
+before merging it. Several PRs can wait, but GitHub builds only one candidate
+at a time. The next PR needs its own candidate result.
 
 !!! warning
     Use an alpha only for a disposable queue test. The production procedure
@@ -17,11 +17,11 @@ The next PR needs its own result.
   [GitHub Merge Queue][github-queue]. Use an App registration you can change.
   Limit that installation to the test repository and its organization-policy
   repository. Each deployment can opt in one repository for candidate checks.
-- Use a prerelease that publishes a separate candidate check. The earlier
-  alpha tests used a shared check name, so those runs don't establish the
-  behavior of this setup. Follow the [upgrade guide](upgrade.md) if you have
-  an existing database. Keep a valid `CODEOWNERS` file and an eligible human
-  owner for the path you'll test.
+- Use a build that supports both queue admission and candidate checks.
+  Builds that publish the required check only on the candidate can't admit
+  PRs under these rules. Follow the [upgrade guide](upgrade.md) if you have
+  an existing database. Keep a valid `CODEOWNERS` file and an eligible owner
+  for the path you'll test.
 - Arrange access to the App's settings and delivery log and to the rulesets
   that apply to the test branch. Record those rules before editing them,
   including organization rules, bypass actors, and other required checks.
@@ -44,8 +44,11 @@ different interval in your deployment. For Helm, set both variables in
 Verify service readiness and run the normal
 [policy tests](configure.md#5-test-the-boundary) before changing any rule.
 Record the App's numeric ID. It posts `Extra CODEOWNERS / merge candidate`
-only on queue candidates. The ordinary PR-head check has a different name.
-The App doesn't need permission to submit reviews or merge.
+on two different commits. For admission, it checks GitHub's two-parent PR
+test merge (`refs/pull/<number>/merge`). For merging, it evaluates the
+one-parent squash candidate separately. The ordinary check on the PR head
+has a different name and stays advisory. The App doesn't need permission
+to submit reviews or merge.
 
 ## 2. Set and verify the queue rules
 
@@ -66,9 +69,10 @@ native code-owner review on the disposable branch. If the rules span multiple
 settings, keep native review active until the queue and App check are
 confirmed. Don't change the review count.
 
-First check that GitHub admits an eligible PR without the candidate check on
-its head. If it doesn't, stop the test and restore the original rules. Don't
-post a placeholder candidate check on the PR head to make it enter the queue.
+First check that GitHub admits an eligible PR when the required App result
+is on its test-merge commit and absent from its raw head. If it doesn't,
+stop the test and restore the original rules. Don't put a placeholder
+check on the PR head.
 
 To inspect active rules, run this read-only command in Bash from any
 directory with `gh` and `jq` installed. Authenticate `gh` to GitHub.com
@@ -102,9 +106,11 @@ bypass. Add a separate required fixture check to hold a candidate for
 negative or timing tests. Pass that check on the PR head only; it must stay
 absent from the held candidate. Don't add the fixture check to production.
 
-1. With no ordinary approval, confirm that a green PR-head check doesn't let
-   the PR enter GitHub's queue. On an approved PR, read a real App delivery
-   and verify that GitHub built a candidate commit distinct from the PR head.
+1. Confirm that a PR without the necessary code-owner approval can't enter
+   the queue, even with enough ordinary reviews. Verify that an eligible PR
+   receives the admission check on its test merge. Queue it and read the
+   App delivery. The new candidate must differ from both the test merge and
+   the raw head.
 2. Without a candidate result from the expected App, verify that GitHub
    waits. The App doesn't discover a candidate if its first event is lost.
    GitHub waits until its queue timeout, unless you redeliver the matching
@@ -120,10 +126,10 @@ absent from the held candidate. Don't add the fixture check to production.
 5. With a fresh eligible PR, verify that GitHub can merge once the ordinary
    review count, candidate check, and every other rule are satisfied.
 
-Don't treat a response from the webhook receiver or a green check on the PR
-head as proof of a passing candidate. Record the head and candidate commit
-separately. If any expected rejection instead merges, stop the experiment
-and restore native review.
+Record the raw head, test merge, and candidate commit separately. Neither
+the admission check nor a successful webhook response proves the candidate
+passed. If any expected rejection instead merges, stop and restore native
+review.
 
 ## 4. Switch a protected branch to candidate checks
 

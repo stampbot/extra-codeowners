@@ -16,6 +16,7 @@ from extra_codeowners.merge_queue import (
     MergeGroupTrigger,
     MergeQueueEvidenceError,
     bind_candidate,
+    candidate_ref_was_replaced,
 )
 from extra_codeowners.webhooks import WebhookError, merge_group_trigger, verify_webhook
 
@@ -92,7 +93,6 @@ def _graph() -> dict[str, Any]:
                             "number": 17,
                             "state": "OPEN",
                             "isDraft": False,
-                            "baseRefOid": TARGET.base_sha,
                             "baseRefName": TARGET.base_branch,
                             "headRefOid": "c" * 40,
                             "repository": {"id": "repository-node"},
@@ -102,6 +102,20 @@ def _graph() -> dict[str, Any]:
             },
         },
     }
+
+
+def test_only_a_verified_live_replacement_can_retire_the_original_ref() -> None:
+    # Verifies XCO-001: absence or partial reads are not retirement evidence.
+    graph = _graph()
+    assert not candidate_ref_was_replaced(TARGET, graph, effective_rules=_rules())
+    replacement = "d" * 40
+    graph["head"]["target"]["oid"] = replacement
+    assert not candidate_ref_was_replaced(TARGET, graph, effective_rules=_rules())
+    entry = graph["mergeQueue"]["entries"]["nodes"][0]
+    entry["headCommit"]["oid"] = replacement
+    assert candidate_ref_was_replaced(TARGET, graph, effective_rules=_rules())
+    graph["mergeQueue"]["entries"]["pageInfo"]["hasNextPage"] = True
+    assert not candidate_ref_was_replaced(TARGET, graph, effective_rules=_rules())
 
 
 def _rules() -> list[dict[str, Any]]:
@@ -194,7 +208,8 @@ def test_rejects_malformed_signed_candidate(fields: dict[str, str]) -> None:
         (("mergeQueue", "entries", "nodes", 0, "headCommit", "oid"), "d" * 40),
         (("mergeQueue", "entries", "nodes", 0, "pullRequest", "state"), "CLOSED"),
         (("mergeQueue", "entries", "nodes", 0, "pullRequest", "isDraft"), True),
-        (("mergeQueue", "entries", "nodes", 0, "pullRequest", "baseRefOid"), "d" * 40),
+        (("mergeQueue", "entries", "nodes", 0, "baseCommit", "oid"), "d" * 40),
+        (("mergeQueue", "entries", "nodes", 0, "pullRequest", "baseRefName"), "other"),
         (("mergeQueue", "entries", "nodes", 0, "pullRequest", "headRefOid"), TARGET.head_sha),
         (("mergeQueue", "entries", "nodes", 0, "pullRequest", "repository", "id"), "other-node"),
     ],
