@@ -190,20 +190,14 @@ PR-head check the only code-owner rule. [Issue #4][issue-4] tracks parallel
 builds and grouped merges. The supported queue doesn't make review dismissal
 atomic with a merge already in progress.
 
-## DCO and release-evidence limits
-
-The repository contains a bounded Developer Certificate of Origin (DCO)
-evaluator. It binds a decision to one repository, pull request, and exact base
-and head commit. No independent service or workflow calls it yet, so a pull
-request can still modify the workflow that checks that pull request. Read the
-[DCO evidence contract](dco-evidence.md) for the implemented boundary.
+## Release-evidence limits
 
 The release pipeline produces BuildKit software bills of materials, raw
 container inventories, provenance, signatures, attestations, and vulnerability
 reports. None of those artifacts alone proves every open-source redistribution
 duty. The project also needs recurring scans of already-published digests
 because a clean release-day scan cannot see tomorrow's disclosure.
-[Remaining work](#remaining-work) lists the tracking issues for both limits.
+[Remaining work](#remaining-work) lists the tracking issues.
 
 ## Planned distributions
 
@@ -241,8 +235,6 @@ wheel-native findings.
   commit lookup returns HTTP 422. Preserve authorization fences while checking
   whether the work is obsolete, temporarily unavailable, or affected by access
   loss.
-- [Issue #40][issue-40]: run DCO evaluation where a pull request can't modify
-  its own checker.
 - [Issue #22][issue-22]: rescan published image digests for newly disclosed
   vulnerabilities.
 - [Issue #341][issue-341]: assess the Psycopg wheel update, including its
@@ -296,7 +288,6 @@ on this list opens or closes.
 [issue-24]: https://github.com/stampbot/extra-codeowners/issues/24
 [issue-30]: https://github.com/stampbot/extra-codeowners/issues/30
 [issue-34]: https://github.com/stampbot/extra-codeowners/issues/34
-[issue-40]: https://github.com/stampbot/extra-codeowners/issues/40
 [issue-74]: https://github.com/stampbot/extra-codeowners/issues/74
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124

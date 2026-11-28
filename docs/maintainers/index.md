@@ -19,7 +19,7 @@ The `CI` workflow consolidates these build and test checks behind `Required`:
 
 The final `Required` job fails unless every group succeeds. Keep that stable
 name in repository rules; matrix details can change without another branch
-protection edit. Keep DCO, CodeQL, dependency review, the larger property-test
+protection edit. Keep CodeQL, dependency review, the larger property-test
 profile, and workflow-security checks as independent required controls. A
 pull-request update cancels its stale run. Runs on `main` use `queue: max`, so a
 later push cannot discard an earlier run.
@@ -273,4 +273,3 @@ hid a missing or mutable input.
 - [Run the live GitHub contract](../how-to/run-live-github-contract.md)
 - [Read live GitHub evidence reports](../reference/live-github-evidence-reports.md)
 - [Update the tutorial webhook relay](update-tutorial-relay.md)
-- [Review the DCO evidence contract](../reference/dco-evidence.md)

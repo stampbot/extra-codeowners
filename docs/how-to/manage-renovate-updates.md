@@ -1,7 +1,7 @@
 # Review or recover a Renovate update
 
-Renovate keeps dependencies current through ordinary pull requests. Its work
-does not bypass DCO, review, or the repository's required checks.
+Renovate keeps dependencies current through ordinary pull requests. Review
+them and wait for the same required checks as any other change.
 
 ## Before you begin
 
@@ -43,16 +43,15 @@ dashboard checkbox to ask Renovate for a fresh branch.
 
 Leave the dashboard and any existing Renovate pull request intact while the
 service recovers. For an urgent security fix, open a normal maintainer pull
-request with a matching DCO sign-off and run the usual checks. Do not forge the
-bot identity or rewrite its commit. Close the superseded Renovate pull request
+request and run the usual checks. Do not forge the bot identity or rewrite
+its commit. Close the superseded Renovate pull request
 after the human change merges; the dashboard keeps an audit trail of that
 decision.
 
 ## Verify the first bot cycle
 
-The first Renovate pull request must show the bot's ordinary DCO sign-off and
-pass the full required CI. Record its URL, head SHA, and DCO result in
-[issue #160](https://github.com/stampbot/extra-codeowners/issues/160). That
+The first Renovate pull request must pass all required checks. Record its URL,
+head SHA, and CI result in [issue #160](https://github.com/stampbot/extra-codeowners/issues/160). That
 observation comes before moving GitHub Action updates away from Dependabot.
 
 For Renovate's dashboard and retry behavior, see the [Dependency

@@ -821,7 +821,7 @@ Pull-request build and test checks run through one `CI` workflow. Linting, the
 Python test matrix, package build, documentation, Helm validation, and native
 container builds can run in parallel. A final `Required` job succeeds only when
 every group succeeds, so repository rules need one stable check name rather
-than a list that changes as the matrix grows. DCO, CodeQL, dependency review,
+than a list that changes as the matrix grows. CodeQL, dependency review,
 the larger property-test profile, and workflow-security checks remain
 independent controls.
 

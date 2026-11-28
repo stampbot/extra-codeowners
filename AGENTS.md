@@ -35,9 +35,8 @@ database whose name ends in `_test`; the suite drops and recreates tables.
 
 ## Rules for changes
 
-- Every commit needs a DCO `Signed-off-by` trailer, and CI enforces it. Add one
-  with `git commit --signoff` only when the person you're working for
-  certifies the DCO for the change. Never add a sign-off for someone else.
+- Commits don't need a DCO `Signed-off-by` trailer. Don't add one on someone
+  else's behalf. Cryptographic commit signing is separate.
 - Use conventional commit subjects. The release planner reads them, and a
   `Release-Channel:` trailer changes the release channel; read
   [CONTRIBUTING.md](CONTRIBUTING.md#choose-a-release-channel) before using one.

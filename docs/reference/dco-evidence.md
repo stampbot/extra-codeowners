@@ -1,16 +1,11 @@
 # DCO evidence contract
 
-Extra CODEOWNERS contains a pure Developer Certificate of Origin (DCO)
-evaluator. It is not the DCO check that runs on pull requests today. No service
-or workflow calls it, and it cannot publish a Check Run.
+This repository doesn't require Developer Certificate of Origin (DCO)
+sign-offs. The code still contains a pure DCO evaluator, but no service or
+workflow calls it, and it cannot publish a Check Run.
 
-The checked-in `.github/workflows/dco.yml` workflow remains active. Because a
-pull request can change that workflow, treat its result as review evidence—not
-as an independently enforced merge control. [Issue #40][issue-40] tracks the
-independent caller, publication guard, live tests, and rollout.
-
-This page defines the evidence that caller must collect. Incomplete,
-contradictory, stale, or ambiguous evidence must leave the check blocking.
+This page records what the dormant evaluator expects. It rejects incomplete,
+contradictory, stale, or ambiguous evidence.
 
 ## Collection sequence
 
@@ -256,12 +251,12 @@ not include untrusted evidence:
 | `commit-order-mismatch` | Detail order, parent order, or reachability disagreed. |
 | `missing-signoff` | At least one commit passed neither sign-off route. |
 
-## Rollout boundary
+## Unimplemented integration
 
 `GitHubClient.get_pull_commit_evidence` performs the bounded commit listing and
 detail collection. No runtime path calls it for DCO today.
 
-The independent integration still must:
+An independent integration would need to:
 
 - run code that the evaluated pull request cannot modify
 - limit its installation token to **Pull requests: read**, **Contents: read**,
@@ -273,10 +268,5 @@ The independent integration still must:
 - pass same-repository, fork, merge, stacked, retarget, force-push, Unicode,
   and negative source-binding cases in a disposable repository.
 
-Do not replace the current DCO check or change repository rules based on this
-dormant layer. Follow [issue #40][issue-40] for the remaining implementation
-and live evidence.
-
 [pr-commits]: https://docs.github.com/en/graphql/reference/pulls#object-pullrequestcommitconnection
 [graphql-rate]: https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#exceeding-the-rate-limit
-[issue-40]: https://github.com/stampbot/extra-codeowners/issues/40

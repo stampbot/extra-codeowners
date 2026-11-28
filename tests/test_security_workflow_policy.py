@@ -18,7 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 PUBLISHED_VERIFIER = ROOT / ".github" / "scripts" / "verify-published-release.sh"
 SECURITY_WORKFLOWS = (
-    "dco.yml",
     "codeql.yml",
     "dependency-review.yml",
     "workflow-security.yml",
@@ -981,17 +980,6 @@ def test_release_provenance_verifies_the_schema_and_platform_binding_of_raw_inve
     assert 'vex="${asset_directory}/extra-codeowners-${version}.openvex.json"' in source
 
 
-def test_dco_uses_the_event_base_and_head_for_its_commit_range() -> None:
-    source = (WORKFLOWS / "dco.yml").read_text(encoding="utf-8")
-
-    assert "BASE_SHA: ${{ github.event.pull_request.base.sha }}" in source
-    assert "HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in source
-    assert 'git rev-list "${BASE_SHA}..${HEAD_SHA}" --' in source
-    assert 'git cat-file -e "${BASE_SHA}^{commit}"' in source
-    assert 'git cat-file -e "${HEAD_SHA}^{commit}"' in source
-    assert "${#commits[@]} != 10#$PR_COMMIT_COUNT" in source
-
-
 def _git(repo: Path, *arguments: str) -> str:
     assert GIT is not None
     result = subprocess.run(  # noqa: S603 - arguments are fixed by each test
@@ -1049,85 +1037,6 @@ def test_superseding_release_must_be_on_main(superseding_branch: str, tmp_path: 
     else:
         assert result.returncode != 0
         assert "is not on main" in result.stderr
-
-
-def _dco_environment(base_sha: str, head_sha: str, commit_count: int) -> dict[str, str]:
-    return os.environ | {
-        "BASE_REPOSITORY_ID": "1",
-        "BASE_SHA": base_sha,
-        "GH_TOKEN": "unused",
-        "HEAD_REF": "test/stacked-child",
-        "HEAD_REPOSITORY_ID": "1",
-        "HEAD_SHA": head_sha,
-        "PR_AUTHOR_ID": "2",
-        "PR_AUTHOR_LOGIN": "test-contributor",
-        "PR_AUTHOR_TYPE": "User",
-        "PR_COMMIT_COUNT": str(commit_count),
-        "REPOSITORY": "example/extra-codeowners",
-        "REPOSITORY_ID": "1",
-    }
-
-
-def _stacked_repository(tmp_path: Path) -> tuple[Path, str, str]:
-    repo = tmp_path / "repository"
-    repo.mkdir()
-    _git(repo, "init", "--initial-branch=main")
-    _git(repo, "config", "user.name", "Test Contributor")
-    _git(repo, "config", "user.email", "test-contributor@example.com")
-    (repo / "base.txt").write_text("base\n", encoding="utf-8")
-    _git(repo, "add", "base.txt")
-    _git(repo, "commit", "-m", "test: add stacked base", "-s")
-    base_sha = _git(repo, "rev-parse", "HEAD")
-    (repo / "child.txt").write_text("child\n", encoding="utf-8")
-    _git(repo, "add", "child.txt")
-    _git(repo, "commit", "-m", "test: add stacked child", "-s")
-    return repo, base_sha, _git(repo, "rev-parse", "HEAD")
-
-
-@pytest.mark.skipif(BASH is None, reason="Bash is required to exercise the workflow script")
-def test_dco_script_accepts_an_exact_stacked_range(tmp_path: Path) -> None:
-    source = (WORKFLOWS / "dco.yml").read_text(encoding="utf-8")
-    script = _run_script(source, "Verify every commit sign-off")
-    repo, base_sha, head_sha = _stacked_repository(tmp_path)
-
-    assert BASH is not None
-    result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed script
-        [BASH, "-c", script],
-        cwd=repo,
-        env=_dco_environment(base_sha, head_sha, 1),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize("failure", ("missing-base", "commit-count"))
-@pytest.mark.skipif(BASH is None, reason="Bash is required to exercise the workflow script")
-def test_dco_script_fails_closed_when_the_range_cannot_be_proven(
-    failure: str, tmp_path: Path
-) -> None:
-    source = (WORKFLOWS / "dco.yml").read_text(encoding="utf-8")
-    script = _run_script(source, "Verify every commit sign-off")
-    repo, base_sha, head_sha = _stacked_repository(tmp_path)
-    if failure == "missing-base":
-        base_sha = "f" * 40
-    commit_count = 2 if failure == "commit-count" else 1
-
-    assert BASH is not None
-    result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed script
-        [BASH, "-c", script],
-        cwd=repo,
-        env=_dco_environment(base_sha, head_sha, commit_count),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode != 0
-    if failure == "missing-base":
-        assert "is not an available commit" in result.stderr
-    else:
-        assert "does not match enumerated range count" in result.stderr
 
 
 def test_dependency_review_uses_the_pull_request_delta_without_fixed_refs() -> None:
