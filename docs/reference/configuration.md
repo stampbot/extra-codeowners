@@ -336,7 +336,7 @@ Leave these settings unset unless you use the
 [one-at-a-time merge queue](../how-to/test-merge-queue.md). The
 `EXPERIMENTAL` variable names are unchanged for compatibility. Only use
 an alpha to test a disposable queue. The target branch must have one active
-merge queue rule: squash, `ALLGREEN`, one build slot, and exactly one PR per
+merge queue rule: `ALLGREEN`, one build slot, and exactly one PR per
 merge. The worker requires fewer than 100 effective branch rules and a
 complete snapshot of at most 100 queue entries. Both responses must fit
 within 64 KiB each.

@@ -212,7 +212,7 @@ def _require_ref(value: object, ref: str, sha: str) -> None:
 
 
 def require_serial_queue_rule(rules: object) -> None:
-    """Require the effective queue rule tested in the one-build fixture."""
+    """Require one built candidate per PR, independent of merge method."""
     if not isinstance(rules, list) or not 0 < len(rules) < MAX_MERGE_QUEUE_BRANCH_RULES:
         raise MergeQueueEvidenceError("GitHub did not return a complete branch rule list")
     merge_rules: list[dict[str, Any]] = []
@@ -229,10 +229,8 @@ def require_serial_queue_rule(rules: object) -> None:
         )
     parameters = merge_rules[0]
     counts = ("max_entries_to_build", "min_entries_to_merge", "max_entries_to_merge")
-    if (
-        parameters.get("grouping_strategy") != "ALLGREEN"
-        or parameters.get("merge_method") != "SQUASH"
-        or any(type(parameters.get(field)) is not int or parameters[field] != 1 for field in counts)
+    if parameters.get("grouping_strategy") != "ALLGREEN" or any(
+        type(parameters.get(field)) is not int or parameters[field] != 1 for field in counts
     ):
         raise MergeQueueEvidenceError(
             "effective merge queue rule does not match the serial fixture"

@@ -96,11 +96,14 @@ def _rules(app_id: int) -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["SQUASH", "REBASE", "MERGE"])
 async def test_admission_proof_checks_exact_app_rule_and_ordered_commit_parents(
-    private_key: str, monkeypatch: pytest.MonkeyPatch
+    private_key: str, monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
     client = GitHubClient(7, private_key)
-    rules = AsyncMock(return_value=_rules(7))
+    branch_rules = _rules(7)
+    branch_rules[0]["parameters"]["merge_method"] = method
+    rules = AsyncMock(return_value=branch_rules)
     commit = AsyncMock(
         return_value={
             "sha": TARGET.test_merge_sha,

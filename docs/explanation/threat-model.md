@@ -195,9 +195,10 @@ behavior from the merge and access-loss paths that remain open. Successful
 approval tests do not remove the shared-head limitation above.
 
 An admission check on GitHub's PR test merge lets the PR enter the queue;
-it does not authorize the final merge. The worker evaluates the separate
-squash candidate against the live target and current review evidence. A pass
-on the PR head, its test merge, or a different candidate cannot stand in for
+it does not authorize the final merge. The worker proves the separate
+candidate descends from the live target and evaluates it against current
+review evidence. A pass on the PR head, its test merge, or a different
+candidate cannot stand in for
 that result under the [one-at-a-time queue rules](../how-to/test-merge-queue.md).
 
 The candidate timer watches passes the worker already confirmed.

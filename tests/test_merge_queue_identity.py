@@ -295,7 +295,6 @@ def test_queue_over_the_limit_does_not_supply_complete_evidence() -> None:
     ("field", "value"),
     [
         ("grouping_strategy", "HEADGREEN"),
-        ("merge_method", "REBASE"),
         ("max_entries_to_build", 2),
         ("max_entries_to_build", True),
         ("max_entries_to_merge", "1"),
@@ -309,6 +308,18 @@ def test_queue_requires_the_effective_serial_rule(field: str, value: object) -> 
     # Verifies XCO-014: the signed trigger doesn't prove the active rules.
     with pytest.raises(MergeQueueEvidenceError, match="serial fixture"):
         bind_candidate(TARGET, _crowded_graph(2), effective_rules=rules)
+
+
+@pytest.mark.parametrize("method", ["SQUASH", "REBASE", "MERGE", "FUTURE_METHOD", None])
+def test_serial_rule_does_not_require_a_merge_method(method: str | None) -> None:
+    # Verifies XCO-007: bind the one built candidate, not a merge-method label.
+    rules = _rules()
+    parameters = rules[1]["parameters"]
+    if method is None:
+        del parameters["merge_method"]
+    else:
+        parameters["merge_method"] = method
+    assert bind_candidate(TARGET, _graph(), effective_rules=rules).trigger == TARGET
 
 
 @pytest.mark.parametrize(

@@ -1332,6 +1332,7 @@ class EvaluationService:
                 paths = await self.github.get_candidate_changed_paths(
                     trigger.installation_id,
                     trigger.repository,
+                    target_ref=trigger.base_ref,
                     target_sha=trigger.base_sha,
                     candidate_sha=trigger.head_sha,
                 )

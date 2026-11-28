@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -15,6 +16,7 @@ OLD = "c" * 40
 NEW = "d" * 40
 TARGET_COMMIT = "e" * 40
 CANDIDATE_COMMIT = "f" * 40
+TARGET_REF = "refs/heads/main"
 REPOSITORY = "example/project"
 COMMITS_ROUTE = f"/repos/{REPOSITORY}/git/commits"
 TREES_ROUTE = f"/repos/{REPOSITORY}/git/trees"
@@ -105,18 +107,24 @@ def test_tree_entry_limit_counts_directories_and_files(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("matching_roots", [False, True])
+@pytest.mark.parametrize("topology", ["direct", "merge", "rebase"])
 async def test_candidate_evidence_reads_both_exact_commits(
-    private_key: str, matching_roots: bool
+    private_key: str, matching_roots: bool, topology: str
 ) -> None:
     requests: list[str] = []
     # Verifies XCO-001: a comparison cannot silently stop at 300 changed files.
     paths = {f"file-{n}.txt" for n in range(301)}
+    parents = {
+        "direct": [TARGET_COMMIT],
+        "merge": [TARGET_COMMIT, OLD],
+        "rebase": [OLD],
+    }[topology]
     responses = {
         f"{COMMITS_ROUTE}/{TARGET_COMMIT}": {"sha": TARGET_COMMIT, "tree": {"sha": BASE}},
         f"{COMMITS_ROUTE}/{CANDIDATE_COMMIT}": {
             "sha": CANDIDATE_COMMIT,
             "tree": {"sha": BASE if matching_roots else CANDIDATE},
-            "parents": [{"sha": TARGET_COMMIT}],
+            "parents": [{"sha": sha} for sha in parents],
         },
         f"{TREES_ROUTE}/{BASE}": tree(BASE),
         f"{TREES_ROUTE}/{CANDIDATE}": tree(CANDIDATE, *(entry(path, NEW) for path in paths)),
@@ -132,6 +140,16 @@ async def test_candidate_evidence_reads_both_exact_commits(
                     "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
                 },
             )
+        if path == "/graphql":
+            assert request.method == "POST"
+            assert json.loads(request.content)["variables"] == {
+                "owner": "example",
+                "repo": "project",
+                "baseRef": TARGET_REF,
+                "candidate": CANDIDATE_COMMIT,
+            }
+            requests.append(path)
+            return httpx.Response(200, json={"data": {"repository": ancestry()}})
         assert request.method == "GET"
         assert request.headers["authorization"] == "Bearer fictional-installation-token"
         assert str(request.url.params) == ("recursive=1" if path.startswith(TREES_ROUTE) else "")
@@ -141,14 +159,21 @@ async def test_candidate_evidence_reads_both_exact_commits(
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
     try:
         result = await client.get_candidate_changed_paths(
-            7, REPOSITORY, target_sha=TARGET_COMMIT, candidate_sha=CANDIDATE_COMMIT
+            7,
+            REPOSITORY,
+            target_ref=TARGET_REF,
+            target_sha=TARGET_COMMIT,
+            candidate_sha=CANDIDATE_COMMIT,
         )
     finally:
         await client.close()
     assert result == trees.CandidateChangedPaths(
         TARGET_COMMIT, CANDIDATE_COMMIT, frozenset() if matching_roots else frozenset(paths)
     )
-    expected = [f"{COMMITS_ROUTE}/{TARGET_COMMIT}", f"{COMMITS_ROUTE}/{CANDIDATE_COMMIT}"]
+    expected = [f"{COMMITS_ROUTE}/{CANDIDATE_COMMIT}"]
+    if topology == "rebase":
+        expected.append("/graphql")
+    expected.append(f"{COMMITS_ROUTE}/{TARGET_COMMIT}")
     if not matching_roots:
         expected.extend([f"{TREES_ROUTE}/{BASE}", f"{TREES_ROUTE}/{CANDIDATE}"])
     assert requests == expected
@@ -166,7 +191,7 @@ async def test_rejects_unbound_or_invalid_ref_before_requests(
     try:
         with pytest.raises(GitHubError, match="invalid merge candidate"):
             await client.get_candidate_changed_paths(
-                7, repo, target_sha=target, candidate_sha=CANDIDATE_COMMIT
+                7, repo, target_ref=TARGET_REF, target_sha=target, candidate_sha=CANDIDATE_COMMIT
             )
     finally:
         await client.close()
@@ -181,3 +206,46 @@ def test_commit_response_must_match_identity() -> None:
     ):
         with pytest.raises(trees.MergeTreeEvidenceError):
             trees.commit_tree_id(wrong, TARGET_COMMIT)
+
+
+def ancestry() -> dict[str, Any]:
+    return {
+        "nameWithOwner": REPOSITORY,
+        "ref": {
+            "compare": {
+                "status": "AHEAD",
+                "aheadBy": 2,
+                "behindBy": 0,
+                "baseTarget": {"__typename": "Commit", "oid": TARGET_COMMIT},
+                "headTarget": {"__typename": "Commit", "oid": CANDIDATE_COMMIT},
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", "DIVERGED"),
+        ("aheadBy", True),
+        ("aheadBy", 0),
+        ("behindBy", 1),
+        ("behindBy", False),
+        ("baseTarget", {"__typename": "Commit", "oid": OLD}),
+        ("headTarget", {"__typename": "Commit", "oid": NEW}),
+        ("headTarget", {"__typename": "Tag", "oid": CANDIDATE_COMMIT}),
+        ("baseTarget", None),
+    ],
+)
+def test_rejects_incomplete_or_contradictory_candidate_ancestry(field: str, value: object) -> None:
+    # Verifies XCO-001 and XCO-007: the proof must name the two evaluated commits.
+    evidence = ancestry()
+    evidence["ref"]["compare"][field] = value
+    with pytest.raises(trees.MergeTreeEvidenceError):
+        trees.require_candidate_ancestry(evidence, REPOSITORY, TARGET_COMMIT, CANDIDATE_COMMIT)
+
+
+@pytest.mark.parametrize("parents", [None, [], [{}], [{"sha": "main"}]])
+def test_requires_candidate_parent_before_collecting_ancestry(parents: object) -> None:
+    with pytest.raises(trees.MergeTreeEvidenceError):
+        trees.first_candidate_parent({"parents": parents})

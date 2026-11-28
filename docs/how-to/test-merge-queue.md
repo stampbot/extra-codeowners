@@ -46,7 +46,7 @@ Verify service readiness and run the normal
 Record the App's numeric ID. It posts `Extra CODEOWNERS / merge candidate`
 on two different commits. For admission, it checks GitHub's two-parent PR
 test merge (`refs/pull/<number>/merge`). For merging, it evaluates the
-one-parent squash candidate separately. The ordinary check on the PR head
+separate queue candidate. The ordinary check on the PR head
 has a different name and stays advisory. The App doesn't need permission
 to submit reviews or merge.
 
@@ -61,8 +61,8 @@ only the PR head. For GitHub Actions, add the `merge_group` trigger.
 In the disposable repo, require the queue and
 `Extra CODEOWNERS / merge candidate` from the installed App. Don't require
 the ordinary Extra CODEOWNERS PR-head check.
-Set the queue to squash merging, one build slot, a minimum and maximum of
-one PR per merge, and **Only merge non-failing pull requests**. Allow no
+Choose the merge method you intend to use. Set one build slot, a minimum and
+maximum of one PR per merge, and **Only merge non-failing pull requests**. Allow no
 bypass actors. Set the status check timeout long enough for candidate checks
 to finish. Verify the App as the expected source before you disable
 native code-owner review on the disposable branch. If the rules span multiple
@@ -90,7 +90,7 @@ gh api --paginate --slurp \
     | {ruleset_id, type, parameters})'
 ```
 
-Expect one active `merge_queue` rule with `SQUASH`, `ALLGREEN`, and
+Expect one active `merge_queue` rule with your chosen method, `ALLGREEN`, and
 `max_entries_to_build`, `min_entries_to_merge`, and
 `max_entries_to_merge` all set to `1`. Verify that the required status check
 has your configured name and the App's ID as `integration_id`, not a
@@ -124,7 +124,9 @@ absent from the held candidate. Don't add the fixture check to production.
    verify that GitHub creates a different candidate and requires a result
    for that commit. The first result can't satisfy it.
 5. With a fresh eligible PR, verify that GitHub can merge once the ordinary
-   review count, candidate check, and every other rule are satisfied.
+   review count, candidate check, and every other rule are satisfied. Use a
+   PR with at least two commits and verify the target branch reflects that
+   merge. Repeat for each merge method you plan to use.
 
 Record the raw head, test merge, and candidate commit separately. Neither
 the admission check nor a successful webhook response proves the candidate

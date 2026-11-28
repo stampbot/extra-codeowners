@@ -586,15 +586,18 @@ The candidate worker uses the same check name on a different commit. The
 two writers verify the role before updating an existing check.
 
 The worker checks the effective branch rule and the full queue snapshot. It
-requires squash merging, one build slot, one PR per merge, and `ALLGREEN`.
+requires one build slot, one PR per merge, and `ALLGREEN`. The repository
+chooses how GitHub merges the PR.
 Only the first entry can have a candidate; any later entry must still be
 waiting without a base or candidate commit. Missing rules, a partial list,
 or a second built candidate blocks publication.
 
 When a waiting PR reaches the front, GitHub can still report its original base
 SHA on the PR record. The candidate worker verifies the live branch and the
-queue entry's base instead. It reads policy at that commit and checks that
-reviewed paths cover the squash candidate's changes relative to it.
+queue entry's base instead. The worker proves the candidate descends from that
+base, either from its first parent or from a GitHub comparison that names both
+commits. It reads policy at the base and checks that the reviewed paths cover
+the changes in the candidate's tree relative to it.
 
 That worker also schedules rechecks of passes it confirmed. The database
 holds the Check Run ID and due time, so one replica claims a recheck and a
