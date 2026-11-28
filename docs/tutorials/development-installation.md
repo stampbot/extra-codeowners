@@ -101,7 +101,7 @@ schema_version = 1
 EOF
 git -C "${TUTORIAL_ROOT}/organization-policy" add \
   .github/extra-codeowners.toml
-git -C "${TUTORIAL_ROOT}/organization-policy" commit --signoff \
+git -C "${TUTORIAL_ROOT}/organization-policy" commit \
   -m 'Add tutorial organization policy'
 git -C "${TUTORIAL_ROOT}/organization-policy" push
 ```
@@ -117,7 +117,7 @@ EOF
 printf '/docs/tutorial-check.txt @%s\n' "$CODEOWNER_LOGIN" \
   >"${TUTORIAL_ROOT}/target/.github/CODEOWNERS"
 git -C "${TUTORIAL_ROOT}/target" add .github
-git -C "${TUTORIAL_ROOT}/target" commit --signoff \
+git -C "${TUTORIAL_ROOT}/target" commit \
   -m 'Add tutorial approval policy'
 git -C "${TUTORIAL_ROOT}/target" push
 ```
@@ -317,7 +317,7 @@ git switch -c tutorial-human-approval
 install -d docs
 printf 'first revision\n' >docs/tutorial-check.txt
 git add docs/tutorial-check.txt
-git commit --signoff -m 'Add the tutorial check file'
+git commit -m 'Add the tutorial check file'
 git push --set-upstream origin HEAD
 gh pr create \
   --title 'Exercise human CODEOWNER approval' \
@@ -336,7 +336,7 @@ Push one more commit as the author:
 ```bash
 printf 'second revision\n' >>docs/tutorial-check.txt
 git add docs/tutorial-check.txt
-git commit --signoff -m 'Update the tutorial check file'
+git commit -m 'Update the tutorial check file'
 git push
 ```
 

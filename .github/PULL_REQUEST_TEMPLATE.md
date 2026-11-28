@@ -24,7 +24,3 @@ fail-closed behavior, persistence, deployment, migration, or rollback. Write
 - [ ] I considered compatibility and documented any migration or rollback constraint.
 - [ ] I used least privilege and did not add credentials or private data.
 - [ ] I ran `mise run check`, or explained any check I could not run.
-- [ ] Every commit includes a Developer Certificate of Origin sign-off.
-
-Official Dependabot updates use GitHub's provenance-constrained bot sign-off
-documented in [CONTRIBUTING.md](../CONTRIBUTING.md#sign-off-commits).

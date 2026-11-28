@@ -157,28 +157,13 @@ Every Alembic head change is a restore boundary: document and test the backup
 restore path rather than claiming an additive migration permits an old-image
 rollback.
 
-## Sign off commits
+## Commit sign-offs
 
-This project uses the [Developer Certificate of Origin][dco], not a
-contributor license agreement. Sign off every commit:
-
-```shell
-git commit --signoff
-```
-
-The sign-off says you have the right to submit the contribution under the
-project's license. It is separate from cryptographic commit signing.
-
-Renovate is configured to add an ordinary DCO sign-off. Its first pull request
-must prove that the trailer matches its Git author before Renovate takes over a
-new update class; [issue #160](https://github.com/stampbot/extra-codeowners/issues/160)
-tracks that check. The only alternate identity accepted by CI is GitHub's
-canonical `dependabot[bot] <support@github.com>` trailer on an official,
-same-repository Dependabot update. CI verifies the bot account, branch and
-repository identity, single-commit history, parent and head SHAs, author and
-committer identities, and GitHub signature before accepting that trailer. This
-narrow exception is DCO handling only; it does not approve or authorize the
-dependency change.
+You don't need `git commit --signoff` or a `Signed-off-by` line. We consider
+a second acknowledgment in the commit message redundant once you've submitted
+the change, so CI doesn't check for one.
+You still need the right to contribute the change under the project's license.
+Cryptographic commit signing is separate and isn't affected by this policy.
 
 ## Open a pull request
 
@@ -189,7 +174,7 @@ compatibility changes.
 Maintainers may ask you to reorganize commits when that makes the history
 easier to review.
 
-Stacked pull requests receive the DCO, CodeQL, dependency-review, and
+Stacked pull requests receive the CodeQL, dependency-review, and
 workflow-security checks even when they target another feature branch. Merge
 the stack from the bottom. After a parent is squash-merged or rebase-merged,
 rebase each child onto the new `main` while dropping the original parent commit
@@ -286,8 +271,8 @@ marker. That lets the next successful run publish the new alpha.
 Use one `Release-Channel` trailer per transition. Its value must be exactly
 `alpha` or `stable`. A malformed or duplicated trailer, a no-op transition,
 or a second unpublished major restart fails release planning. The colon is required:
-`Release-Channel=stable` is not valid. Keep the trailer in the final block with
-any `Signed-off-by` line. For a squash merge, check the resulting commit
+`Release-Channel=stable` is not valid. Keep the trailer in the final block
+of the commit message. For a squash merge, check the resulting commit
 message: a pull-request body is not a substitute unless GitHub includes the
 trailer in the squash commit.
 
@@ -308,5 +293,3 @@ Reviewers consider these properties in order:
 3. test evidence and operational recoverability
 4. compatibility and configuration migration
 5. maintainability and documentation
-
-[dco]: https://developercertificate.org/

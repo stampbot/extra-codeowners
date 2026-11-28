@@ -19,7 +19,6 @@ Confirm all of these conditions:
 - Each pull request targets the branch immediately below it; the bottom one
   targets `main`.
 - The branches live in this repository and you may push them with a lease.
-- Every commit carries a valid DCO sign-off.
 - You may retarget, rewrite, and merge the pull requests.
 
 Record every pull-request number and exact head SHA before merging anything.
@@ -42,14 +41,13 @@ new child head, wait for the complete check set, then merge PR B.
 
 Wait for these workflows on every level of the stack:
 
-- DCO
 - CodeQL
 - Dependency review
 - workflow security, including actionlint, full action pins, and zizmor.
 
 They run for opened, reopened, synchronized, and edited pull requests even when
-the base is another feature branch. DCO and dependency review both calculate
-their range from the pull-request event's current base and head.
+the base is another feature branch. Dependency review uses the pull-request
+event's current base and head.
 
 A green result on a feature base is not approval to merge the same head into
 `main`. Retargeting changes the comparison and GitHub's synthetic merge commit,
@@ -194,9 +192,9 @@ and
 
 The pinned Python CodeQL actions run in no-build mode. They inspect the checked
 out source but do not import, test, or otherwise execute application code from
-the pull request. DCO reads commit metadata, while the other pinned actions
-inspect dependencies and workflow data. A pull request can still change the
-workflow being reviewed, so these token limits remain necessary.
+the pull request. The other pinned actions inspect dependencies and workflow
+data. A pull request can still change the workflow being reviewed, so these
+token limits remain necessary.
 Feature branches created before the current triggers reached `main` may still
 contain older workflow definitions. Rebase them before relying on automatic
 stack checks. A first-time fork workflow can also wait for explicit maintainer
