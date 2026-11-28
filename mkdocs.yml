@@ -77,6 +77,7 @@ nav:
           - Repository team access grants: explanation/adrs/2026-11-12-scope-repository-team-grants.md
           - Start a new major alpha line: explanation/adrs/2026-11-23-start-a-new-major-alpha-line.md
           - Require a one-at-a-time merge queue: explanation/adrs/2026-11-25-require-a-serial-merge-queue.md
+          - Verify merge candidate ancestry: explanation/adrs/2026-11-28-verify-candidates-without-choosing-merge-method.md
       - Design comparisons:
           - Bounded reconciliation traces: explanation/design/2026-11-02-bounded-reconciliation-traces.md
           - Merge-queue candidate checks: explanation/design/2026-11-21-merge-queue-candidate-checks.md
@@ -122,6 +123,7 @@ nav:
           - November published schema 0012 restore: maintainers/evidence/2026-11-23-published-schema-0012-restore.md
           - Native review handback: maintainers/evidence/2026-11-23-native-review-restored-with-queue.md
           - November queue admission and separate candidates: maintainers/evidence/2026-11-27-queue-admission-and-candidates.md
+          - November queue merge methods: maintainers/evidence/2026-11-28-queue-merge-methods.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md

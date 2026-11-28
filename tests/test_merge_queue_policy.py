@@ -133,7 +133,7 @@ async def test_candidate_uses_existing_policy_and_does_not_publish(
     assert assessment.identity == IDENTITY
     assert assessment.result.conclusion is EvaluationConclusion.SUCCESS
     github.get_candidate_changed_paths.assert_awaited_once_with(
-        10, REPO, target_sha=BASE, candidate_sha=CANDIDATE
+        10, REPO, target_ref=IDENTITY.trigger.base_ref, target_sha=BASE, candidate_sha=CANDIDATE
     )
     github.get_codeowners_errors.assert_awaited_once_with(10, REPO, BASE)
     github.get_merge_candidate.assert_awaited_once_with(IDENTITY.trigger)
@@ -153,7 +153,7 @@ async def test_later_queue_entry_uses_live_candidate_base_not_recorded_pr_base(
     assessment = await service.assess_merge_candidate(IDENTITY, authority_generation=8)
     assert assessment.result.conclusion is EvaluationConclusion.SUCCESS
     github.get_candidate_changed_paths.assert_awaited_once_with(
-        10, REPO, target_sha=BASE, candidate_sha=CANDIDATE
+        10, REPO, target_ref=IDENTITY.trigger.base_ref, target_sha=BASE, candidate_sha=CANDIDATE
     )
     github.get_codeowners_errors.assert_awaited_once_with(10, REPO, BASE)
 

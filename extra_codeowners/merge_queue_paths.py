@@ -19,6 +19,23 @@ _MODE_TYPES: Final = {
     "160000": "commit",
 }
 
+CANDIDATE_ANCESTRY_QUERY = """\
+query CandidateAncestry($owner: String!, $repo: String!, $baseRef: String!, $candidate: String!) {
+  repository(owner: $owner, name: $repo) {
+    nameWithOwner
+    ref(qualifiedName: $baseRef) {
+      compare(headRef: $candidate) {
+        status
+        aheadBy
+        behindBy
+        baseTarget { __typename oid }
+        headTarget { __typename oid }
+      }
+    }
+  }
+}
+"""
+
 
 class MergeTreeEvidenceError(ValueError):
     """GitHub did not provide complete evidence for the requested object."""
@@ -66,6 +83,46 @@ def require_commit_parents(
         )
     ):
         raise MergeTreeEvidenceError("GitHub commit does not have the expected parents")
+
+
+def first_candidate_parent(commit: dict[str, object]) -> str:
+    """Read the first parent of a candidate whose commit identity was checked."""
+    parents = commit.get("parents")
+    if not isinstance(parents, list) or not parents or not isinstance(parents[0], dict):
+        raise MergeTreeEvidenceError("GitHub candidate commit omitted its first parent")
+    return require_object_id(parents[0].get("sha"))
+
+
+def require_candidate_ancestry(
+    evidence: object, repository: str, target_sha: str, candidate_sha: str
+) -> None:
+    """Require GitHub to prove the target is an ancestor of this candidate."""
+    if not isinstance(evidence, dict):
+        raise MergeTreeEvidenceError("GitHub omitted the candidate comparison repository")
+    name = evidence.get("nameWithOwner")
+    ref = evidence.get("ref")
+    comparison = ref.get("compare") if isinstance(ref, dict) else None
+    if not isinstance(name, str) or name.lower() != repository.lower():
+        raise MergeTreeEvidenceError("GitHub compared commits from a different repository")
+    if not isinstance(comparison, dict):
+        raise MergeTreeEvidenceError("GitHub omitted the candidate ancestry comparison")
+    for field, sha in (("baseTarget", target_sha), ("headTarget", candidate_sha)):
+        commit = comparison.get(field)
+        if (
+            not isinstance(commit, dict)
+            or commit.get("__typename") != "Commit"
+            or commit.get("oid") != sha
+        ):
+            raise MergeTreeEvidenceError("GitHub compared different candidate revisions")
+    ahead, behind = comparison.get("aheadBy"), comparison.get("behindBy")
+    if (
+        comparison.get("status") != "AHEAD"
+        or type(ahead) is not int
+        or ahead <= 0
+        or type(behind) is not int
+        or behind != 0
+    ):
+        raise MergeTreeEvidenceError("GitHub did not prove the candidate descends from its target")
 
 
 def _read_tree_entries(evidence: object, tree_id: str) -> dict[str, tuple[str, str]]:

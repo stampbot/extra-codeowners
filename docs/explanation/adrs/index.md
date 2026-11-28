@@ -26,6 +26,7 @@ old one.
 | 2026-11-12 | [Scope repository access grants to their repository](2026-11-12-scope-repository-team-grants.md) | Accepted |
 | 2026-11-23 | [Start a new major alpha line without publishing stable](2026-11-23-start-a-new-major-alpha-line.md) | Accepted |
 | 2026-11-25 | [Require a one-at-a-time merge queue for enforcement](2026-11-25-require-a-serial-merge-queue.md) | Accepted |
+| 2026-11-28 | [Verify candidates without choosing the merge method](2026-11-28-verify-candidates-without-choosing-merge-method.md) | Accepted; revises the squash requirement |
 
 These first five were written in October 2026 to record decisions already in
 effect. Their dates come from the commits and pull requests that made each

@@ -52,11 +52,14 @@ from extra_codeowners.merge_queue import (
     require_serial_queue_rule,
 )
 from extra_codeowners.merge_queue_paths import (
+    CANDIDATE_ANCESTRY_QUERY,
     CandidateChangedPaths,
     MergeTreeEvidenceError,
     changed_paths,
     commit_tree_id,
+    first_candidate_parent,
     immediate_tree_entry,
+    require_candidate_ancestry,
     require_commit_parents,
     require_object_id,
 )
@@ -1721,30 +1724,51 @@ class GitHubClient:
         installation_id: int,
         repository: str,
         *,
+        target_ref: str,
         target_sha: str,
         candidate_sha: str,
     ) -> CandidateChangedPaths:
         """Read the candidate's changes relative to the target, without file-list truncation."""
         try:
-            if not _REPOSITORY_FULL_NAME_RE.fullmatch(repository) or any(
-                part in {".", ".."} for part in repository.split("/")
+            if (
+                not _REPOSITORY_FULL_NAME_RE.fullmatch(repository)
+                or any(part in {".", ".."} for part in repository.split("/"))
+                or not target_ref.startswith("refs/heads/")
+                or target_ref == "refs/heads/"
+                or target_sha == candidate_sha
             ):
-                raise MergeTreeEvidenceError("invalid merge candidate repository")
+                raise MergeTreeEvidenceError("invalid merge candidate repository or revision")
             require_object_id(target_sha)
             require_object_id(candidate_sha)
 
-            async def tree_for(sha: str, parents: tuple[str, ...] | None = None) -> str:
-                payload = await self._get_bounded_json(
+            async def read_commit(sha: str) -> Any:
+                return await self._get_bounded_json(
                     f"/repos/{repository}/git/commits/{sha}",
                     installation_id,
                     max_bytes=MAX_MERGE_COMMIT_RESPONSE_BYTES,
                 )
-                if parents is not None:
-                    require_commit_parents(payload, sha, parents)
-                return commit_tree_id(payload, sha)
 
-            before = await tree_for(target_sha)
-            after = await tree_for(candidate_sha, (target_sha,))
+            candidate = await read_commit(candidate_sha)
+            after = commit_tree_id(candidate, candidate_sha)
+            if first_candidate_parent(candidate) != target_sha:
+                owner, name = repository.split("/", 1)
+                data = await self._graphql(
+                    installation_id,
+                    query=CANDIDATE_ANCESTRY_QUERY,
+                    variables={
+                        "owner": owner,
+                        "repo": name,
+                        "baseRef": target_ref,
+                        "candidate": candidate_sha,
+                    },
+                    operation="merge candidate ancestry",
+                    max_bytes=MAX_MERGE_QUEUE_RESPONSE_BYTES,
+                    queue_read=True,
+                )
+                require_candidate_ancestry(
+                    data.get("repository"), repository, target_sha, candidate_sha
+                )
+            before = commit_tree_id(await read_commit(target_sha), target_sha)
             if before == after:
                 return CandidateChangedPaths(target_sha, candidate_sha, frozenset())
 

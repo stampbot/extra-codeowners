@@ -169,6 +169,11 @@ with passing App checks on their test merges and each merged only after its
 own candidate passed. A PR with an ordinary review but no qualifying
 code-owner approval stayed out of the queue. This was a source-build test.
 
+The [November 28 merge-method test](evidence/2026-11-28-queue-merge-methods.md)
+ran the App workers from source against three disposable queues. GitHub used
+rebase, a merge commit, and squash, with a separate checked candidate for
+each PR. A denied rebase control never entered the queue.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
